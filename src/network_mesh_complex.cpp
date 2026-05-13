@@ -975,7 +975,7 @@ bool RandomPyrochloreNMC::build_network(){
     map<int, vector<int>> valence_map;
     Vec3D p1, p2;
     int nx, ny, nz, vnum, face_idx, v_idx, new_idx, idx1, idx2, num_pts;
-    double len_scale = pow(density, -1./3.);
+    double len_scale = pow(density, -1./3.), x, y, z;
     voro::voronoicell cell;
     vector<edge> wide_edges;
 
@@ -983,7 +983,7 @@ bool RandomPyrochloreNMC::build_network(){
     wide_bounds = get_wide_bounds(bounds, 2*len_scale);
     switch(proc){
         case point_process::poisson:
-            generators = poisson_sphere_packing(wide_bounds, DENSITY_TO_LENGTH*len_scale);
+            generators = poisson_sphere_packing(wide_bounds, pow(DENSITY_TO_LENGTH/density, 1./3.));
             break;
         case point_process::lloyd:
             num_pts = (int) round(density * wide_bounds.get_vol());
@@ -998,6 +998,7 @@ bool RandomPyrochloreNMC::build_network(){
     nz = (int) round(wide_bounds.zrange() / len_scale);
 
     cout << "Number of generators: " << generators.size() / 3 << endl;
+    cout << "Target density: " << density << endl;
 
     //Build a Voronoi tessellation and find all edges. Also record edge
     //midpoints and keep track of all edges with a given end point.
@@ -1008,7 +1009,8 @@ bool RandomPyrochloreNMC::build_network(){
     voro::c_loop_all cloop(con);
     if(cloop.start()){
         do if(con.compute_cell(cell, cloop)){
-            cell.vertices(vertices);
+            cloop.pos(x, y, z);
+            cell.vertices(x, y, z, vertices);
             cell.face_vertices(faces);
             face_idx = 0;
             do {
@@ -1060,6 +1062,8 @@ bool RandomPyrochloreNMC::build_network(){
     }
 
     cout << "Number of midpoints: " << midpoints.size() / 3 << endl;
+
+    cout << "Number of edges: " << wide_edges.size() << endl;
 
     cout << "Checkpoint 2\n";
 

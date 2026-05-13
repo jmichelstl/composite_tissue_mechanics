@@ -18,7 +18,7 @@
 
 //Empirical conversion factor to go from a desired density to a minimum distance
 //in a Poisson sphere packing
-#define DENSITY_TO_LENGTH 1.077217345
+#define DENSITY_TO_LENGTH .686
 
 std::vector<double> poisson_sphere_packing(Bounds3D bounds, double cutoff);
 

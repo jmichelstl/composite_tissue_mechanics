@@ -15,7 +15,7 @@ using std::vector;
 using namespace voro;
 
 //Maximum permissible number of attempts
-#define MAX_ATTEMPTS 75
+#define MAX_ATTEMPTS 100
 
 //Initial number of points for which to allocate memory in each box of the
 //Voro++ grid
@@ -60,11 +60,12 @@ vector<double> poisson_sphere_packing(Bounds3D bounds, double cutoff){
 
     vector<Vec3D> points, active_points;
     vector<int> indices;
-    double grid_len, r_x, r_y, r_z, r_r, r_cos, r_sin, r_phi, dx, dy, dz;
-    double cutoff_sq = cutoff*cutoff, xrange, yrange, zrange;
     double minx, maxx, miny, maxy, minz, maxz;
+    double grid_len, r_x, r_y, r_z, r_r, r_cos, r_sin, r_phi, dx, dy, dz;
+    double cutoff_sq = cutoff*cutoff, xrange, yrange, zrange, expect_val;
     int nx, ny, nz, rand_idx, x_idx, y_idx, z_idx, grid_idx, attempts, i, j, k;
     int min_x_iter, max_x_iter, min_y_iter, max_y_iter, min_z_iter, max_z_iter;
+    int replentish_attempts;
     time_t now = time(0);
     std::mt19937 gen{static_cast<uint32_t>(now)};
     std::uniform_real_distribution<double> rdist(0.0, 1.0);
@@ -73,25 +74,27 @@ vector<double> poisson_sphere_packing(Bounds3D bounds, double cutoff){
     Vec3D active_pt, new_pt;
     vector<double> coordinates;
 
+    //Set up the grid for indexing points
     minx = bounds.min_x();
     maxx = bounds.max_x();
     miny = bounds.min_y();
     maxy = bounds.max_y();
     minz = bounds.min_z();
     maxz = bounds.max_z();
-
-    std::cout << "Volume: " << bounds.get_vol() << std::endl;
-    std::cout << "Cutoff: " << cutoff << std::endl;
-
-    //Set up the grid for indexing points
-    xrange = bounds.xrange();
-    yrange = bounds.yrange();
-    zrange = bounds.zrange();
+    xrange = maxx - minx;
+    yrange = maxy - miny;
+    zrange = maxz - minz;
     grid_len = cutoff / sqrt(3.);
-    nx = (int) ceil(xrange / grid_len);
-    ny = (int) ceil(yrange / grid_len);
-    nz = (int) ceil(zrange / grid_len);
+    nx = (int) ceil((maxx - minx) / grid_len);
+    ny = (int) ceil((maxy - miny) / grid_len);
+    nz = (int) ceil((maxz - minz) / grid_len);
     indices.assign(nx*ny*nz, -1);
+
+    //Compute the expected number of times a point would have to randomly drawn
+    //such that it falls in a cube of side length cutoff. Use this to determine
+    //the number of times to attempt to add a new active point before aborting.
+    expect_val = xrange*yrange*zrange / (cutoff*cutoff*cutoff);
+    replentish_attempts = (int) (expect_val + 2*sqrt(expect_val));
 
     //Create an inaugural point
     r_x = rdist(gen)*xrange + minx;
@@ -99,7 +102,8 @@ vector<double> poisson_sphere_packing(Bounds3D bounds, double cutoff){
     r_z = rdist(gen)*zrange + minz;
     points.push_back(Vec3D(r_x, r_y, r_z));
     active_points.push_back(points[0]);
-    indices[get_grid_idx(points[0], bounds, grid_len, nx, ny, nz)] = 0;
+    rand_idx = get_grid_idx(points[0], bounds, grid_len, nx, ny, nz);
+    indices[rand_idx] = 0;
 
     //Until the active set is empty, choose a point from the active set, and
     //generate another point by generating a random displacement. Determine
@@ -110,9 +114,11 @@ vector<double> poisson_sphere_packing(Bounds3D bounds, double cutoff){
     do{
 
         //Reset the range of the integer distribution according to the current
-        //number of active points, and draw a random index.
-	    std::uniform_int_distribution<int>::param_type new_par(0, active_points.size()-1);
-	    idist.param(new_par);
+	    //number of active points, and draw a random index.
+	    {
+	        std::uniform_int_distribution<int>::param_type new_par(0, active_points.size()-1);
+	        idist.param(new_par);
+        }
 	    rand_idx = idist(gen);
 	    attempts = 0;
 	    active_pt = points[rand_idx];
@@ -127,13 +133,20 @@ vector<double> poisson_sphere_packing(Bounds3D bounds, double cutoff){
                 r_phi = 2*M_PI*rdist(gen);
 
 	            new_pt.x = active_pt.x + r_r*r_sin*cos(r_phi);
-                new_pt.y = active_pt.y + r_r*r_sin*sin(r_phi);
-                new_pt.z = active_pt.z + r_r*r_cos;
+	            new_pt.y = active_pt.y + r_r*r_sin*sin(r_phi);
+		        new_pt.z = active_pt.z + r_r*r_cos;
+	            x_idx = (int) floor((new_pt.x - minx) / grid_len);
+                y_idx = (int) floor((new_pt.y - miny) / grid_len);
+                z_idx = (int) floor((new_pt.z - minz) / grid_len);
             } while(! bounds.in_bounds(new_pt));
 
-            x_idx = (int) floor((new_pt.x - minx) / grid_len);
+	        x_idx = (int) floor((new_pt.x - minx) / grid_len);
             y_idx = (int) floor((new_pt.y - miny) / grid_len);
             z_idx = (int) floor((new_pt.z - minz) / grid_len);
+            if(indices[z_idx*nx*ny + y_idx*nx + x_idx] >= 0){
+                success = false;
+                continue;
+            }
             min_x_iter = max(x_idx - 2, 0);
             max_x_iter = min(x_idx + 2, nx-1);
             min_y_iter = max(y_idx - 2, 0);
@@ -171,15 +184,16 @@ vector<double> poisson_sphere_packing(Bounds3D bounds, double cutoff){
 
         //If there are no more active points, try to randomly place another
 	    //point. If this fails, the volume is deemed full.
-        if(active_points.size() > 0) continue;
+	    if(active_points.size() > 0) continue;
+
         attempts = 0;
 	    do{
             success = true;
 
-            new_pt.x = rdist(gen)*xrange + minx;
-            new_pt.y = rdist(gen)*yrange + miny;
-            new_pt.z = rdist(gen)*zrange + minz;
-            x_idx = (int) floor((new_pt.x - minx) / grid_len);
+            new_pt.x = minx + rdist(gen)*xrange;
+            new_pt.y = miny + rdist(gen)*yrange;
+            new_pt.z = minz + rdist(gen)*zrange;
+	        x_idx = (int) floor((new_pt.x - minx) / grid_len);
             y_idx = (int) floor((new_pt.y - miny) / grid_len);
             z_idx = (int) floor((new_pt.z - minz) / grid_len);
             min_x_iter = max(x_idx - 2, 0);
@@ -193,23 +207,24 @@ vector<double> poisson_sphere_packing(Bounds3D bounds, double cutoff){
 	            for(j = min_y_iter; j <= max_y_iter; j++){
                     for(k = min_z_iter; k <= max_z_iter; k++){
                         grid_idx = k*nx*ny + j*nx + i;
-			            if(indices[grid_idx] > -1){
+                        if(indices[grid_idx] > -1){
                             if(distance_sq(new_pt, points[indices[grid_idx]]) < cutoff_sq){
                                 success = false;
-				                break;
+                                break;
                             }
                         }
                     }
-		            if(! success) break;
+	                if(! success) break;
                 }
-		        if(! success) break;
+	            if(! success) break;
             }
-	        if(success){
-                indices[z_idx*nx*ny + y_idx*nx + x_idx] = points.size();
+
+            if(success){
+                indices[z_idx*ny*ny + y_idx*nx + x_idx] = points.size();
                 points.push_back(new_pt);
                 active_points.push_back(new_pt);
             }
-        } while (! success && ++attempts < MAX_ATTEMPTS);
+        } while (! success && ++attempts < replentish_attempts);
 
     }while(active_points.size() > 0);
 
@@ -360,7 +375,7 @@ vector<double> compute_hyperuniform_packing(Bounds3D bounds, double density, dou
 
     //Given a desired density, use an empirically determined value to convert
     //to a minimum separation between points
-    cutoff = DENSITY_TO_LENGTH / pow(density, 1/3);
+    cutoff = pow(DENSITY_TO_LENGTH / density, 1/3);
 
     //Obtain the original Poisson packing
     coordinates = poisson_sphere_packing(bounds, cutoff);
