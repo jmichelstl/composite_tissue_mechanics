@@ -87,7 +87,7 @@ void assign(Vec3D &vec, double x, double y, double z);
 
 void assign(Vec3D &vec, std::vector<double> vertices, int idx);
 
-void get_midpoint(Vec3D v1, Vec3D v2, Vec3D midpoint);
+void get_midpoint(Vec3D v1, Vec3D v2, Vec3D &midpoint);
 
 //Type to define the boundary of a region
 class Bounds3D {

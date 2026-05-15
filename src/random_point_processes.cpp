@@ -7,12 +7,9 @@
 #include "random_point_processes.hpp"
 #include <random>
 #include <voro++.hh>
-#include <tetgen.h>
 #include <iostream>
 
 using std::vector;
-
-using namespace voro;
 
 //Maximum permissible number of attempts
 #define MAX_ATTEMPTS 100
@@ -237,109 +234,99 @@ vector<double> poisson_sphere_packing(Bounds3D bounds, double cutoff){
     return coordinates;
 }
 
-//Result of integrating the Lloyd noise over a tetrahedron
-double lloyd_integral(double r_c, double r1, double r2, double r3, double r4){
+/*Result of integrating the Lloyd noise over a tetrahedron
+In the general case, for a centroid rc and tetrahedron vertices r1, r2, r3
+and r4, the result has the form
+    r1_i*r1_i + r2_i*r2_i + r3_i*r3_i + r4_i*r4_i) / 60
+    + (r1_i*r2_i + r1_i*r3_i + r1_i*r4_i + r2_i*r3_i + r2_i*r4_i + r3_i*r4_i)/60
+    - rc_i * (r1_i + r2_i + r3_i + r4_i) / 12 + rc_i*rc_i / 6,
+
+where summation over repeated Cartesian indices is implied. Here, it is
+assumed that one point in the tetrahedron is the centroid, and that the centroid
+is at the origin.
+*/
+double lloyd_integral(double r1, double r2, double r3){
 
     double integral;
 
-    integral = (r1*r1 + r2*r2 + r3*r3 + r4*r4) / 60;
-    integral += (r1*r2 + r1*r3 + r1*r4 + r2*r3 + r2*r4 + r3*r4) / 60;
-    integral -= r_c * (r1 + r2 + r3 + r4) / 12;
-    integral += r_c*r_c / 6;
+    integral = (r1*r1 + r2*r2 + r3*r3) / 60;
+    integral += (r1*r2 + r1*r3 + r2*r3) / 60;
 
     return integral; 
 }
 
-void assign_point(double *plist, int idx, double &x, double &y, double &z){
-
-    x = plist[3*idx];
-    y = plist[3*idx+1];
-    z = plist[3*idx+2];
-}
-
 //Create a boundary mesh for a polyhedron, partition into tetrahedra, and
 //compute the contribution to the Lloyd noise from each tetrahedron.
-void calc_lloyd_noise(int idx, vector<int> face_nums, vector<Vec3D> centroids, vector<vector<double>> vertex_sets, vector<vector<int>> face_sets, vector<double> &noise_list){
+void calc_lloyd_noise(int idx, vector<Vec3D> centroids, vector<vector<double>> vertex_sets, vector<vector<int>> face_sets, vector<double> &noise_list){
 
-    int i, j, face_iter = 0;
-    double x1, x2, x3, x4, y1, y2, y3, y4, z1, z2, z3, z4, det;
-    tetgenio in, out;
-    tetgenio::facet *f;
-    tetgenio::polygon *p;
-    const char *flags = "pq1.414";
-    in.firstnumber = 0;
-
-    Vec3D centroid = centroids[idx];
+    int i, j, face_iter = 0, vnum;
+    double x1, x2, x3, x4, y1, y2, y3, y4, z1, z2, z3, z4, tet_noise;
+    Vec3D centroid, v1, v2, v3, p1, p2, mid1, mid2, cross_prod;
     vector<double> vertices = vertex_sets[idx];
     vector<int> faces = face_sets[idx];
 
-    //Copy over points
-    in.numberofpoints = vertices.size() / 3;
-    in.pointlist = new double[in.numberofpoints * 3];
-    for(i = 0; i < vertices.size(); i ++){
-        in.pointlist[i] = vertices[i];
-    }
+    noise_list[idx] = 0;
+    copy(centroids[idx], centroid);
 
-    //Create faces
-    in.numberoffacets = face_nums[idx];
-    in.facetmarkerlist = NULL;
-    in.facetlist = new tetgenio::facet[in.numberoffacets];
-    for(i = 0; i < in.numberoffacets; i++){
-        f = &in.facetlist[i];
-	    f->numberofpolygons = 1;
-	    f->polygonlist = new tetgenio::polygon[f->numberofpolygons];
-	    f->numberofholes = 0;
-	    f->holelist = NULL;
-	    p = &f->polygonlist[0];
-	    p->numberofvertices = vertices[face_iter];
-        p->vertexlist = new int[p->numberofvertices];
+    //Loop over faces. Partition each face into triangles. From each triangle,
+    //construct a tetrahedron whose fourth point is the cell centroid, and
+    //determine the contribution to the Lloyd noise of that tetrahedron.
+    do{
 
-	    for(j = 1; j <= p->numberofvertices; j++){
-            p->vertexlist[j] = faces[face_iter + j];
+        vnum = faces[face_iter];
+
+        //Find an interior point for the present face
+        assign(p1, vertices, faces[face_iter + 1]);
+        assign(p2, vertices, faces[face_iter + 2]);
+        get_midpoint(p1, p2, mid1);
+        assign(p1, vertices, faces[face_iter + vnum/2]);
+        assign(p2, vertices, faces[face_iter + vnum/2 + 1]);
+        get_midpoint(p1, p2, mid2);
+        get_midpoint(mid1, mid2, v1);
+        difference(v1, centroid, v1); 
+
+        for(i = 1; i < faces[face_iter]; i++){
+            assign(v2, vertices, faces[face_iter+i]);
+            difference(v2, centroid, v2);
+            assign(v3, vertices, faces[face_iter + i%vnum + 1]);
+            difference(v3, centroid, v3);
+            tet_noise = lloyd_integral(v1.x, v2.x, v3.x);
+            tet_noise += lloyd_integral(v1.y, v2.y, v3.y);
+            tet_noise += lloyd_integral(v1.z, v2.z, v3.z);
+            cross(v1, v2, cross_prod);
+            noise_list[idx] += abs(dot(cross_prod, v3))*tet_noise;
         }
-	    face_iter += faces[face_iter] + 1;
-    }
 
-    //Create the tetrahedralization
-    tetrahedralize((char *) flags, &in, &out);
-
-    //Loop over tetrahedra and compute the Lloyd noise contribution of each
-    for(i = 0; i < out.numberoftetrahedra; i += 4){
-        assign_point(out.pointlist, out.tetrahedronlist[4*i],x1,y1,z1);
-        assign_point(out.pointlist, out.tetrahedronlist[4*i+1],x2,y2,z2);
-        assign_point(out.pointlist, out.tetrahedronlist[4*i+2],x3,y3,z3);
-        assign_point(out.pointlist, out.tetrahedronlist[4*i+3],x4,y4,z4);
-        det = (x2-x1)*((y3-y1)*(z4-z1) - (y4-y1)*(z3-z1));
-        det += (x3-x1)*((y4-y1)*(z2-z1) - (y2-y1)*(z4-z1));
-        det += (x4-x1)*((y2-y1)*(z3-z1) - (y3-y1)*(z2-z1));
-        noise_list[idx] = lloyd_integral(centroid.x, x1, x2, x3, x4);
-        noise_list[idx] += lloyd_integral(centroid.y, y1, y2, y3, y4);
-        noise_list[idx] += lloyd_integral(centroid.z, z1, z2, z3, z4);
-        noise_list[idx] *= abs(det);
-    }
+        face_iter += vnum + 1;
+    } while(face_iter < faces.size());
 }
 
 //Given a Voronoi container with a point set, find numbers of faces, centroids,
 //vertices, and facets for all cells.
-void compute_cell_data(container con, vector<int> &face_nums, vector<Vec3D> &centroids, vector<vector<double>> &vertex_sets, vector<vector<int>> &face_sets){
+void compute_cell_data(vector<double> coordinates, Bounds3D bounds, int nx, int ny, int nz, vector<Vec3D> &centroids, vector<vector<double>> &vertex_sets, vector<vector<int>> &face_sets){
 
-    c_loop_all cloop(con);
-    voronoicell cell;
-    double x, y, z;
+    voro::voronoicell cell;
+    double cx, cy, cz, x, y, z;
     vector<double> vertices;
     vector<int> faces;
 
-    face_nums.clear();
     centroids.clear();
     vertex_sets.clear();
     face_sets.clear();
 
+    //voro::container con(bounds.min_x(), bounds.max_x(), bounds.min_y(), bounds.max_y(), bounds.min_z(), bounds.max_z(),nx,ny,nz,false,false,false,PTS_PER_BOX);
+    voro::container_periodic con(bounds.max_x(), 0, bounds.max_y(), 0, 0, bounds.max_z(),nx,ny,nz,PTS_PER_BOX);
+    for(int iter = 0; iter < coordinates.size(); iter += 3){
+        con.put(iter/3, coordinates[iter], coordinates[iter+1], coordinates[iter+2]);
+    }
+    voro::c_loop_all_periodic cloop(con);
+
     if(cloop.start()){
         do if(con.compute_cell(cell, cloop)){
-            face_nums.push_back(cell.number_of_faces());
-	        cell.centroid(x, y, z);
-	        centroids.push_back(Vec3D(x, y, z));
-            cell.vertices(vertices);
+            cloop.pos(x, y, z);
+	        cell.centroid(cx, cy, cz);
+	        centroids.push_back(Vec3D(cx+x, cy+y, cz+z));
+            cell.vertices(x, y, z, vertices);
 	        vertex_sets.push_back(vertices);
 	        cell.face_vertices(faces);
 	        face_sets.push_back(faces);
@@ -349,102 +336,115 @@ void compute_cell_data(container con, vector<int> &face_nums, vector<Vec3D> &cen
 
 vector<double> compute_hyperuniform_packing(Bounds3D bounds, double density, double conv_tol, int max_iter){
 
-    double curr_noise, prev_noise, rel_diff, grid_len;
-    double minx, maxx, miny, maxy, minz, maxz, cutoff;
+    double curr_noise, prev_noise, rel_diff, grid_len, cutoff;
     int iter = 0, nx, ny, nz;
     vector<double> coordinates, noises;
-    vector<int> faces;
     vector<double> vertices;
-    vector<int> face_nums;
     vector<Vec3D> centroids;
     vector<vector<double>> vertex_sets;
     vector<vector<int>> face_sets;
     double *begin;
 
-    minx = bounds.min_x();
-    maxx = bounds.max_x();
-    miny = bounds.min_y();
-    maxy = bounds.max_y();
-    minz = bounds.min_z();
-    maxz = bounds.max_z();
-
     grid_len = pow(density, -1./3);
     nx = (int) ceil(bounds.xrange() / grid_len);
-    nz = (int) ceil(bounds.yrange() / grid_len);
+    ny = (int) ceil(bounds.yrange() / grid_len);
     nz = (int) ceil(bounds.zrange() / grid_len);
 
     //Given a desired density, use an empirically determined value to convert
     //to a minimum separation between points
-    cutoff = pow(DENSITY_TO_LENGTH / density, 1/3);
+    cutoff = pow(DENSITY_TO_LENGTH / density, 1./3.);
+
+    std::cout << "Target density: " << density << std::endl;
+    std::cout << "Cutoff length: " << cutoff << std::endl;
 
     //Obtain the original Poisson packing
     coordinates = poisson_sphere_packing(bounds, cutoff);
+
+    std::cout << "Number of points here: " << coordinates.size()/3 << std::endl;    
+
     noises.assign(coordinates.size() / 3, 0);
 
-    container con(minx,maxx,miny,maxy,minz,maxz,nx,ny,nz,false,false,false,PTS_PER_BOX);
-
     //Find the original Voronoi tessellation and the accompanying Lloyd noise
-    for(int iter = 0; iter < coordinates.size(); iter += 3){
-        con.put(iter/3, coordinates[iter], coordinates[iter+1], coordinates[iter+2]);
-    }
-    compute_cell_data(con, face_nums, centroids, vertex_sets, face_sets);
+    compute_cell_data(coordinates, bounds, nx, ny, nz, centroids, vertex_sets, face_sets);
+
+    std::cout << "Checkpoint 1.\n";
 
     //Compute noises and sum them in parallel
     tbb::parallel_for( tbb::blocked_range<size_t>(0, noises.size()),
         [&](const tbb::blocked_range<size_t>& r) {
             for(size_t i=r.begin(); i!=r.end(); ++i){
-                calc_lloyd_noise(i, face_nums, centroids, vertex_sets, face_sets, noises);
+                calc_lloyd_noise(i,centroids,vertex_sets,face_sets,noises);
             }
         }
     );
+
+    std::cout << "Checkpoint 2.\n";
+
     begin = &noises[0];
     prev_noise = sum_reduce(begin, begin+noises.size(), 0.);
 
-    //Perform a  Lloyd move, replacing each point by the cenroid of the
-    //Voronoi cell it generates.
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, noises.size()),
-        [&](const tbb::blocked_range<size_t>& r) {
-            for(size_t i=r.begin(); i!=r.end(); ++i){
-                coordinates[3*i] = centroids[i].x;
-                coordinates[3*i+1] = centroids[i].y;
-                coordinates[3*i+2] = centroids[i].z;
-            }
-        }
-    );
+    std::cout << "Checkpoint 3.\n";
 
     //Perform Lloyd moves until either the convergence tolerance is satisfied
     //or the iteration limit is reached.
     do {
+
+       //std::cout << "Iteration start.\n";
+
         //Perform a  Lloyd move, replacing each point by the cenroid of the
         //Voronoi cell it generates.
         tbb::parallel_for(tbb::blocked_range<size_t>(0, noises.size()),
             [&](const tbb::blocked_range<size_t>& r) {
                 for(size_t i=r.begin(); i!=r.end(); ++i){
                     coordinates[3*i] = centroids[i].x;
+                    if(centroids[i].x < bounds.min_x()){
+                        coordinates[3*i] += bounds.xrange();
+                    }
+                    else if(centroids[i].x > bounds.max_x()){
+                        coordinates[3*i] -= bounds.xrange();
+                    }
                     coordinates[3*i+1] = centroids[i].y;
+                    if(centroids[i].y < bounds.min_y()){
+                        coordinates[3*i+1] += bounds.yrange();
+                    }
+                    else if(centroids[i].y > bounds.max_y()){
+                        coordinates[3*i+1] -= bounds.yrange();
+                    }
                     coordinates[3*i+2] = centroids[i].z;
+                    if(centroids[i].z < bounds.min_z()){
+                        coordinates[3*i+2] += bounds.zrange();
+                    }
+                    else if(centroids[i].z > bounds.max_z()){
+                        coordinates[3*i+2] -= bounds.zrange();
+                    }
                 }
             }
         );
 
-	    //Compute the new cell data and Lloyd noises
-        for(int iter = 0; iter < coordinates.size(); iter += 3){
-            con.put(iter/3, coordinates[iter], coordinates[iter+1], coordinates[iter+2]);
-        }
-        compute_cell_data(con, face_nums, centroids, vertex_sets, face_sets);
+       //std::cout << "Lloyd move carried out.\n";
+
+	   //Compute the new cell data and Lloyd noises
+       compute_cell_data(coordinates, bounds, nx, ny, nz, centroids, vertex_sets, face_sets);
+
+       //std::cout << "Cell data computed.\n";
 
         //Compute noises and sum them in parallel
         tbb::parallel_for(tbb::blocked_range<size_t>(0, noises.size()),
             [&](const tbb::blocked_range<size_t>& r) {
                 for(size_t i=r.begin(); i!=r.end(); ++i){
-                    calc_lloyd_noise(i, face_nums, centroids, vertex_sets, face_sets, noises);
+                    calc_lloyd_noise(i,centroids,vertex_sets,face_sets,noises);
                 }
             }
         );
+
+        //std::cout << "Noises computed.\n";
+
         begin = &noises[0];
         curr_noise = sum_reduce(begin, begin+noises.size(), 0.);
 	    rel_diff = abs((curr_noise - prev_noise) / prev_noise);
 	    prev_noise = curr_noise;
+
+        std::cout << iter << "\t" << curr_noise << "\t " << rel_diff << std::endl;
     } while(rel_diff > conv_tol && ++iter < max_iter);
 
     return coordinates;

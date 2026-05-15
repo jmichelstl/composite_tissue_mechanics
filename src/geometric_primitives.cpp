@@ -99,7 +99,7 @@ void assign(Vec3D &vec, std::vector<double> vertices, int idx){
     vec.z = vertices[3*idx+2];
 }
 
-void get_midpoint(Vec3D v1, Vec3D v2, Vec3D midpoint){
+void get_midpoint(Vec3D v1, Vec3D v2, Vec3D &midpoint){
     midpoint.x = (v1.x + v2.x) / 2;
     midpoint.y = (v1.y + v2.y) / 2;
     midpoint.z = (v1.z + v2.z) / 2;

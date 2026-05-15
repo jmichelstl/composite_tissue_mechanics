@@ -183,8 +183,6 @@ bool parse_construction(string line, construction_type &ct, shared_ptr<Construct
     int num_read;
     double scale, density;
 
-    cout << "parse_construction called\n";
-
     vector<string> tokens = split(line, ' ');
     if(! tokens.size()){
         cerr << "No arguments were read.\n";

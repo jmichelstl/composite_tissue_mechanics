@@ -16,8 +16,8 @@
 using namespace std;
 
 //Default values for halting when making random point hyperuniform point sets
-double hu_conv_tol = 1e-4;
-double hu_max_iter = 1e4;
+double hu_max_iter = 1e3;
+double hu_conv_tol = 1e-6;
 
 /*Struct to sort points in conter-clockwise order according to the projection in
   a plane of the difference between each point and a central point.
@@ -709,8 +709,6 @@ vector<triple> optimal_triples(int hinge, vector<int> end_pts, vector<Vec3D> ver
     vector<int> best_shuffling = end_pts;
     vector<triple> triples;
 
-    cout << "Attempting to compute triples.\n";
-
     //Create a map from each possible pairing of triple end points to the
     //angle between the line segments terminating at those endpoints.
     for(i = 0; i < end_pts.size() - 1; i++){
@@ -734,10 +732,6 @@ vector<triple> optimal_triples(int hinge, vector<int> end_pts, vector<Vec3D> ver
         }
     }
 
-    cout << "Reached here.\n";
-
-    cout << "End point size: " << end_pts.size() << endl;
-
     //Evaluate each valid shuffling of endpoints, and find the one that
     //leads to the set of triples whose hinge angles have the greatest
     //geometric mean.
@@ -758,8 +752,6 @@ vector<triple> optimal_triples(int hinge, vector<int> end_pts, vector<Vec3D> ver
         triples.push_back(make_tuple(best_shuffling[i], hinge, best_shuffling[i+1]));
     }
 
-    cout << "Finished computing triples.\n";
-
     return triples;
 }
 
@@ -776,7 +768,6 @@ void RandomNMCBase::compute_triples(){
     for(edge e : edges){
         idx1 = get<0>(e);
         idx2 = get<1>(e);
-
         if(neighbor_map.find(idx1) == neighbor_map.end()){
             neighbor_map.insert(make_pair(idx1, vector<int>()));
         }
@@ -971,23 +962,22 @@ bool RandomPyrochloreNMC::build_network(){
     vector<int> faces;
     vector<double> generators, vertices, midpoints;
     map<Vec3D, int> pmap;
-    map<IdxPair, int> emap;
+    set<IdxPair> edge_set;
     map<int, vector<int>> valence_map;
     Vec3D p1, p2;
-    int nx, ny, nz, vnum, face_idx, v_idx, new_idx, idx1, idx2, num_pts;
+    int nx, ny, nz, vnum, face_idx, v_idx, new_idx, idx1, idx2;
     double len_scale = pow(density, -1./3.), x, y, z;
     voro::voronoicell cell;
     vector<edge> wide_edges;
 
     //Use the specified point process to obtain generating points.
-    wide_bounds = get_wide_bounds(bounds, 2*len_scale);
+    wide_bounds = get_wide_bounds(bounds, len_scale);
     switch(proc){
         case point_process::poisson:
             generators = poisson_sphere_packing(wide_bounds, pow(DENSITY_TO_LENGTH/density, 1./3.));
             break;
         case point_process::lloyd:
-            num_pts = (int) round(density * wide_bounds.get_vol());
-	        generators = compute_hyperuniform_packing(wide_bounds, num_pts, hu_conv_tol, hu_max_iter);
+	        generators = compute_hyperuniform_packing(wide_bounds, density, hu_conv_tol, hu_max_iter);
 	        break;
         default:
 	        break;
@@ -997,16 +987,18 @@ bool RandomPyrochloreNMC::build_network(){
     ny = (int) round(wide_bounds.yrange() / len_scale);
     nz = (int) round(wide_bounds.zrange() / len_scale);
 
+    cout << "Volume: " << wide_bounds.get_vol() << endl;
     cout << "Number of generators: " << generators.size() / 3 << endl;
     cout << "Target density: " << density << endl;
 
     //Build a Voronoi tessellation and find all edges. Also record edge
     //midpoints and keep track of all edges with a given end point.
-    voro::container con(wide_bounds.min_x(), wide_bounds.max_x(), wide_bounds.min_y(), wide_bounds.max_y(), wide_bounds.min_z(), wide_bounds.max_z(), nx, ny, nz, false, false, false, PTS_PER_BOX);
+    //voro::container con(wide_bounds.min_x(), wide_bounds.max_x(), wide_bounds.min_y(), wide_bounds.max_y(), wide_bounds.min_z(), wide_bounds.max_z(), nx, ny, nz, false, false, false, PTS_PER_BOX);
+    voro::container_periodic con(wide_bounds.max_x(), 0, wide_bounds.max_y(), 0, 0, wide_bounds.max_z(), nx, ny, nz, PTS_PER_BOX);
     for(int iter = 0; iter < generators.size(); iter += 3){
         con.put(iter/3, generators[iter],generators[iter+1],generators[iter+2]);
     }
-    voro::c_loop_all cloop(con);
+    voro::c_loop_all_periodic cloop(con);
     if(cloop.start()){
         do if(con.compute_cell(cell, cloop)){
             cloop.pos(x, y, z);
@@ -1033,15 +1025,15 @@ bool RandomPyrochloreNMC::build_network(){
 		            idx1 = pmap[p1];
 		            idx2 = pmap[p2];
 		            IdxPair ipair = IdxPair(idx1, idx2);
-		            if(emap.find(ipair) == emap.end()){
-                        new_idx = emap.size();
-                        emap.insert(make_pair(ipair, new_idx));
+		            if(edge_set.find(ipair) == edge_set.end()){
+                        new_idx = edge_set.size();
+                        edge_set.insert(ipair);
                         midpoints.push_back((p1.x + p2.x) / 2.);
                         midpoints.push_back((p1.y + p2.y) / 2.);
 			            midpoints.push_back((p1.z + p2.z) / 2.);
+			            valence_map[idx1].push_back(new_idx);
+			            valence_map[idx2].push_back(new_idx);
                     }
-			        valence_map[idx1].push_back(emap[ipair]);
-			        valence_map[idx2].push_back(emap[ipair]);
                 }
                 face_idx += vnum + 1;
             } while(face_idx < faces.size());
@@ -1071,7 +1063,7 @@ bool RandomPyrochloreNMC::build_network(){
 
     cout << "Checkpoint 3\n";
 
-    //compute_triples();
+    compute_triples();
 
     cout << "Checkpoint 4\n";
 

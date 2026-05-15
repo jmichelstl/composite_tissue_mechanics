@@ -28,7 +28,7 @@ lib/libgeomprim.a:
 
 lib/librandompointproc.a:
 	mkdir -p lib
-	#$(gcc) $(ONEAPI_INC) $(VORO_INC) -c src/random_point_processes.cpp -o lib/librandompointproc.a -L./lib -lgeomprim -lvoro++ $(ONEAPI_LINK) -ltbb -DTETLIBRARY -ltet
+	#$(gcc) $(ONEAPI_INC) $(VORO_INC) -c src/random_point_processes.cpp -o lib/librandompointproc.a -L./lib -lgeomprim -lvoro++ $(ONEAPI_LINK) -ltbb
 	$(gcc) $(ONEAPI_INC) $(VORO_INC) -c src/random_point_processes.cpp -o lib/librandompointproc.a -DTETLIBRARY 
 
 lib/libnmc.a:
@@ -40,13 +40,13 @@ lib/libnmio.a:
 	$(gcc) -c -o lib/libnmio.a src/network_mesh_io.cpp
 
 nmcbatch: lib/libgeomprim.a lib/libnmc.a lib/libnmio.a lib/librandompointproc.a
-	$(gcc) $(ONEAPI_INC) -o nmcbatch src/network_mesh_batch.cpp -ltinyxml2 -L/usr/lib/x86_64-linux-gnu/ -lgmsh -L./lib -lgeomprim -lnmc -lnmio -lz -lvoro++ -lrandompointproc $(ONEAPI_LINK) -ltbb -ltet
+	$(gcc) $(ONEAPI_INC) -o nmcbatch src/network_mesh_batch.cpp -ltinyxml2 -L/usr/lib/x86_64-linux-gnu/ -lgmsh -L./lib -lgeomprim -lnmc -lnmio -lz -lvoro++ -lrandompointproc $(ONEAPI_LINK) -ltbb
 
 ngrelax: lib/libgeomprim.a lib/libflists.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a
-	$(gcc) $(ONEAPI_INC) -o ngrelax src/relax_network_gel_composite.cpp -L./lib -lgeomprim -lnmc -lnmio -lflists -lrandompointproc -lgmsh -ltet -lz $(ONEAPI_LINK) -ltbb $(MKL_LINK) -ltinyxml2 -lboost_filesystem -lboost_regex -lvoro++
+	$(gcc) $(ONEAPI_INC) -o ngrelax src/relax_network_gel_composite.cpp -L./lib -lgeomprim -lnmc -lnmio -lflists -lrandompointproc -lgmsh -lz $(ONEAPI_LINK) -ltbb $(MKL_LINK) -ltinyxml2 -lboost_filesystem -lboost_regex -lvoro++
 
 nmtraj_viz: lib/libgeomprim.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a
-	$(gcc) $(VTK_INC) -o nmtraj_viz src/visualize_network_mesh.cpp -L./lib -lgeomprim -lnmc -lnmio -lrandompointproc -lgmsh -ltet -lz -lvoro++ $(VTK_LINK) $(ONEAPI_LINK) -ltbb
+	$(gcc) $(VTK_INC) -o nmtraj_viz src/visualize_network_mesh.cpp -L./lib -lgeomprim -lnmc -lnmio -lrandompointproc -lgmsh -lz -lvoro++ $(VTK_LINK) $(ONEAPI_LINK) -ltbb
 
 geomclean:
 	rm lib/libgeomprim.a
