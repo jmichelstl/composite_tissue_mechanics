@@ -237,11 +237,6 @@ int main(int argc, char **argv){
     //reference sate.
     else{
         oss << output_base << ".vtk";
-        int min = 1e9;
-        for(int next_idx : tets){
-            if(next_idx < min) min = next_idx;
-        }
-        cout << "Minimum tet index: " << min << endl;
         visualize_nmc(coords, edges, tets, oss.str());
     }
 

@@ -48,6 +48,9 @@ ngrelax: lib/libgeomprim.a lib/libflists.a lib/libnmio.a lib/libnmc.a lib/libran
 nmtraj_viz: lib/libgeomprim.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a
 	$(gcc) $(VTK_INC) -o nmtraj_viz src/visualize_network_mesh.cpp -L./lib -lgeomprim -lnmc -lnmio -lrandompointproc -lgmsh -lz -lvoro++ $(VTK_LINK) $(ONEAPI_LINK) -ltbb
 
+nmc_stats: lib/libgeomprim.a lib/libnmio.a
+	$(gcc) -o nmc_stats src/compute_network_mesh_statistics.cpp -L./lib -lgeomprim -lnmio -lz -ltinyxml2
+
 geomclean:
 	rm lib/libgeomprim.a
 
@@ -72,6 +75,9 @@ ngclean:
 vizclean:
 	rm -f nmtraj_viz
 
+statclean:
+	rm -f nmc_stats
+
 clean:
 	rm lib/libgeomprim.a
 	rm lib/libflists.a
@@ -81,3 +87,4 @@ clean:
 	rm -f nmcbatch
 	rm -f nglreax
 	rm -f nmtraj_viz
+	rm -f nmc_stats

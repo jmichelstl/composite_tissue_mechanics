@@ -1467,6 +1467,8 @@ int cgtr_relax(vector<double> &points, unordered_set<int> bottom, unordered_set<
         prev_cf = curr_cf;
         fmag_sqr = cblas_ddot(num_dof, &forces[0], 1, &forces[0], 1);
         if(fmag_sqr / fmag_sqr_0 < conv_tol_sqr) break;
+
+        //cout << "Iteration " << n_outer << endl;
     }
 
     if(fmag_sqr / fmag_sqr_0 < conv_tol_sqr){
@@ -1639,7 +1641,6 @@ int parallel_nlcg_relax(vector<double> &points, unordered_set<int> bottom, unord
             //ls_coeff /= cblas_ddot(num_dof, &search_dir[0], 1, &adv_forces[0], 1);
             grad_dir_prod = -cblas_ddot(num_dof, &forces[0], 1, &search_dir[0], 1);
             ls_coeff *= grad_dir_prod / (prev_grad_dir_prod - grad_dir_prod);
-            cout << "Line search coefficient: " << ls_coeff << endl;
             cblas_daxpy(num_dof, ls_coeff, &search_dir[0], 1, &points[0], 1);
             prev_grad_dir_prod = grad_dir_prod;
             ls_iter ++;
@@ -1857,7 +1858,19 @@ int parallel_cgtr_relax(vector<double> &points, unordered_set<int> bottom, unord
         else cblas_daxpy(num_dof, -1., &step[0], 1, &points[0], 1);
 
         prev_cf = curr_cf;
+
+        //cout << "Iteration " << n_outer << endl;
     }
+
+    if(fmag_sqr / fmag_sqr_0 < conv_tol_sq){
+        f_rms = cblas_dnrm2(forces.size(), &forces[0], 1) / sqrt(num_dof);
+        return n_outer;
+    }
+
+    //Refine the global search with a local nonlinear CG search
+    NLCGParams cgpar(max_outer, max_inner, cgtrpar.conv_tol*sqrt(fmag_sqr_0/fmag_sqr));
+
+    n_outer += parallel_nlcg_relax(points, bottom, top, edges, lengths, triples, angles, tets, volumes, inv_mats, mech_params, cgpar, n_threads, f_rms);
 
     f_rms = cblas_dnrm2(forces.size(), &forces[0], 1) / sqrt(num_dof);
     return n_outer;

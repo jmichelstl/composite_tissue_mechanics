@@ -433,6 +433,8 @@ void NetworkMeshComplex::reassign_edges_triples(){
         edges[iter] = make_tuple(pmap[idx1], pmap[idx2]);
     }
 
+    if(! triples.size()) return;
+
     //Find those triples that have retained all members and replace the list
     //of triples.
     for(triple t : triples){
@@ -919,6 +921,11 @@ void cull_edges(Bounds3D bounds, vector<double> in_pts, vector<edge> in_edges, v
     bool one_in, two_in;
     Vec3D p1, p2;
     map<Vec3D, int> pmap;
+    vector<edge> prelim_edges;
+    double length, mean, sdev, min_length;
+    int tally = 0;
+
+    mean = sdev = 0;
 
     for(edge e : in_edges){
         assign(p1, in_pts, get<0>(e));
@@ -934,8 +941,15 @@ void cull_edges(Bounds3D bounds, vector<double> in_pts, vector<edge> in_edges, v
             closest_intersection(bounds, p1, p2);
         }
 
-        if(! one_in){
+        else if(! one_in){
             closest_intersection(bounds, p2, p1);
+        }
+
+        else{
+            length = distance(p1, p2);
+            mean += length;
+            sdev += length*length;
+            tally ++;
         }
 
         if(pmap.find(p1) == pmap.end()){
@@ -952,13 +966,25 @@ void cull_edges(Bounds3D bounds, vector<double> in_pts, vector<edge> in_edges, v
             out_pts.push_back(p2.z);
         }
 
-        out_edges.push_back(make_tuple(pmap[p1], pmap[p2]));
+        prelim_edges.push_back(make_tuple(pmap[p1], pmap[p2]));
+    }
+
+    //Remove especially short edges
+    mean /= tally;
+    sdev = sqrt(sdev / tally - mean*mean);
+    min_length = mean - 2*sdev;
+
+    for(edge next_edge : prelim_edges){
+        assign(p1, out_pts, get<0>(next_edge));
+        assign(p2, out_pts, get<1>(next_edge));
+        length = distance(p1, p2);
+        if(length >= min_length) out_edges.push_back(next_edge); 
     }
 }
 
 bool RandomPyrochloreNMC::build_network(){
 
-    Bounds3D wide_bounds;
+    //Bounds3D wide_bounds;
     vector<int> faces;
     vector<double> generators, vertices, midpoints;
     map<Vec3D, int> pmap;
@@ -971,30 +997,36 @@ bool RandomPyrochloreNMC::build_network(){
     vector<edge> wide_edges;
 
     //Use the specified point process to obtain generating points.
-    wide_bounds = get_wide_bounds(bounds, len_scale);
+    //wide_bounds = get_wide_bounds(bounds, len_scale);
     switch(proc){
         case point_process::poisson:
-            generators = poisson_sphere_packing(wide_bounds, pow(DENSITY_TO_LENGTH/density, 1./3.));
+            //generators = poisson_sphere_packing(wide_bounds, pow(DENSITY_TO_LENGTH/density, 1./3.));
+            generators = poisson_sphere_packing(bounds, pow(DENSITY_TO_LENGTH/density, 1./3.));
             break;
         case point_process::lloyd:
-	        generators = compute_hyperuniform_packing(wide_bounds, density, hu_conv_tol, hu_max_iter);
+	        //generators = compute_hyperuniform_packing(wide_bounds, density, hu_conv_tol, hu_max_iter);
+	        generators = compute_hyperuniform_packing(bounds, density, hu_conv_tol, hu_max_iter);
 	        break;
         default:
 	        break;
     }
 
-    nx = (int) round(wide_bounds.xrange() / len_scale);
+    /*nx = (int) round(wide_bounds.xrange() / len_scale);
     ny = (int) round(wide_bounds.yrange() / len_scale);
-    nz = (int) round(wide_bounds.zrange() / len_scale);
+    nz = (int) round(wide_bounds.zrange() / len_scale);*/
+    nx = (int) round(bounds.xrange() / len_scale);
+    ny = (int) round(bounds.yrange() / len_scale);
+    nz = (int) round(bounds.zrange() / len_scale);
 
-    cout << "Volume: " << wide_bounds.get_vol() << endl;
+    //cout << "Volume: " << wide_bounds.get_vol() << endl;
     cout << "Number of generators: " << generators.size() / 3 << endl;
     cout << "Target density: " << density << endl;
 
     //Build a Voronoi tessellation and find all edges. Also record edge
     //midpoints and keep track of all edges with a given end point.
     //voro::container con(wide_bounds.min_x(), wide_bounds.max_x(), wide_bounds.min_y(), wide_bounds.max_y(), wide_bounds.min_z(), wide_bounds.max_z(), nx, ny, nz, false, false, false, PTS_PER_BOX);
-    voro::container_periodic con(wide_bounds.max_x(), 0, wide_bounds.max_y(), 0, 0, wide_bounds.max_z(), nx, ny, nz, PTS_PER_BOX);
+    //voro::container_periodic con(wide_bounds.max_x(), 0, wide_bounds.max_y(), 0, 0, wide_bounds.max_z(), nx, ny, nz, PTS_PER_BOX);
+    voro::container_periodic con(bounds.max_x(), 0, bounds.max_y(), 0, 0, bounds.max_z(), nx, ny, nz, PTS_PER_BOX);
     for(int iter = 0; iter < generators.size(); iter += 3){
         con.put(iter/3, generators[iter],generators[iter+1],generators[iter+2]);
     }
@@ -1060,6 +1092,10 @@ bool RandomPyrochloreNMC::build_network(){
     cout << "Checkpoint 2\n";
 
     cull_edges(bounds, midpoints, wide_edges, points, edges);
+    //Account for the fact that some edges were rejected for being too short,
+    //and some points may need to be ejected and vertex indices may need to be
+    //updated.
+    reassign_edges_triples();
 
     cout << "Checkpoint 3\n";
 
