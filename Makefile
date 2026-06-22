@@ -17,6 +17,7 @@ all:
 	make nmcbatch
 	make ngrelax
 	make nmtraj_viz
+	make nmc_stats
 
 lib/libflists.a:
 	mkdir -p lib

@@ -60,9 +60,18 @@ struct NMCRelaxationRun {
 };
 
 //Tools for reading and writing the intial state of a network
+
+//The following two functions are appropriate when the vertices of the network
+//are a subset of the vertices of the simplicial mesh.
 bool extract_network_mesh_complex(char *file_name, vector<double> &coordinates, vector<int> &edges, vector<int> &triples, vector<double> &angles, vector<int> &tets);
 
 bool report_network_mesh_complex(char *file_name, shared_ptr<NetworkMeshComplex> nmc);
+
+//The following two functions are appropriate when the vertices of the network
+//and the vertices of the simplicial meshes are disjoint sets
+bool report_disjoint_network_mesh_complex(char *file_name, shared_ptr<RandomNMCBase> rnmc);
+
+bool extract_disjoint_network_mesh_complex(char *file_name, vector<double> &coordinates, unsigned &num_net_verts, vector<int> &edges, vector<int> &triples, vector<double> &angles, vector<int> &tets, vector<int> &vert_ranges, vector<int> &contained_verts);
 
 //Open a manifest describing a relaxation run
 bool open_network_mesh_trajectory(string output, string nmc_file, RelaxParams params, string &xml_name, string &nmt_name);

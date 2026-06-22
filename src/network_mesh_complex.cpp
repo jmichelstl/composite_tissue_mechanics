@@ -10,6 +10,7 @@
 #include <gmsh.h>
 #include <set>
 #include <cfloat>
+#include "nmbvh.hpp"
 
 #define PTS_PER_BOX 8
 
@@ -200,17 +201,16 @@ NetworkMeshComplex::~NetworkMeshComplex(){}
 //rectuangular prism spanning these bounds, enforce inclusion of all specified 
 //points, and create lists of output points, index pairs specifying network 
 //edges, and point quartets specifying tetrahedra.
-void NetworkMeshComplex::tetrahedralize(){
+void LatticeBasedNMC::tetrahedralize(){
 
     vector<int> tags;
     int iter, tally, in_idx1, in_idx2, in_idx3, out_idx1, out_idx2, out_idx3;
-    int minus_x_idx,plus_x_idx,minus_y_idx, plus_y_idx, minus_z_idx, plus_z_idx;
     double lc, minx, maxx, miny, maxy, minz, maxz;
     map<Vec3D, int> pmap;
     vector<Vec3D> interior;
     vector<set<Vec3D>> face_sets;
     vector<int> minus_x_tags, plus_x_tags, minus_y_tags, plus_y_tags, minus_z_tags, plus_z_tags;
-    vector<pair<int, int>> ov, entities;
+    vector<pair<int, int>> entities;
     map<pair<int, int>, int> emap;
     vector<double> out_points;
     vector<edge> out_edges;
@@ -398,6 +398,135 @@ void NetworkMeshComplex::tetrahedralize(){
     points = out_points;
     edges = out_edges;
     triples = out_triples;
+}
+
+//Tetrahadralize the volume occupied by a network created from a random point
+//set. Given the risk of smal, poorly shaped tetrahedra, the vertices of the
+//network are not required to be included in the mesh.
+void RandomNMCBase::tetrahedralize(){
+
+    int iter, tally, offset;
+    double lc, minx, maxx, miny, maxy, minz, maxz;
+    map<Vec3D, int> pmap;
+    vector<int> minus_x_tags, plus_x_tags, minus_y_tags, plus_y_tags, minus_z_tags, plus_z_tags;
+    vector<pair<int, int>> entities;
+    map<pair<int, int>, int> emap;
+    map<int, vector<int>> point_tet_map;
+    shared_ptr<NMBVH> tet_bvh;
+    Vec3D query;
+
+    minx = bounds.min_x();
+    maxx = bounds.max_x();
+    miny = bounds.min_y();
+    maxy = bounds.max_y();
+    miny = bounds.min_z();
+    maxz = bounds.max_z();
+
+    //Make a record of how many points are already present
+    offset = points.size() / 3 - 1;
+
+    //This is the side length of a regular tetrahedron with the maximum 
+    //permissible volume.
+    lc = pow(6*sqrt(2) * mesh_vol, 1./3);
+
+    gmsh::initialize();
+    gmsh::model::add("box");
+
+    //Make records of the points and line segments on the cube faces
+    //Bottom
+    create_face(lc, maxy-miny, maxx-minx, face_sets[9], Vec3D((minx+maxx)/2,(miny+maxy)/2,minz), Vec3D(0,1.,0), Vec3D(1.,0,0), pmap, emap, minus_z_tags);
+    //Negative x face
+    create_face(lc, maxz-minz, maxy-miny, face_sets[1], Vec3D(minx,(miny+maxy)/2,(minz+maxz)/2), Vec3D(0,0,1.), Vec3D(0,1.,0), pmap, emap, minus_x_tags);
+    //Positive x face
+    create_face(lc, maxy-miny, maxz-minz, face_sets[3], Vec3D(maxx,(miny+maxy)/2,(minz+maxz)/2), Vec3D(0,1.,0), Vec3D(0,0,1.), pmap, emap, plus_x_tags);
+    //Negative y face
+    create_face(lc, maxx-minx, maxz-minz, face_sets[5], Vec3D((minx+maxx)/2,miny,(minz+maxz)/2), Vec3D(1.,0,0), Vec3D(0,0,1.), pmap, emap, minus_y_tags);
+    //Positive y face
+    create_face(lc, maxz-minz, maxx-minx, face_sets[7], Vec3D((minx+maxx)/2,maxy,(minz+maxz)/2), Vec3D(0,0,1.), Vec3D(1.,0,0), pmap, emap, plus_y_tags);
+    //Top
+    create_face(lc, maxx-minx, maxy-miny, face_sets[11], Vec3D((minx+maxx)/2,(miny+maxy)/2,maxz), Vec3D(1.,0,0), Vec3D(0,1.,0), pmap, emap, plus_z_tags);
+
+    //Add the prism faces
+    tally = emap.size();
+    gmsh::model::geo::addCurveLoop(minus_z_tags, ++tally);
+    gmsh::model::geo::addPlaneSurface({tally}, 1);
+    gmsh::model::geo::addCurveLoop(minus_x_tags, ++tally);
+    gmsh::model::geo::addPlaneSurface({tally}, 2);
+    gmsh::model::geo::addCurveLoop(plus_x_tags, ++tally);
+    gmsh::model::geo::addPlaneSurface({tally}, 3);
+    gmsh::model::geo::addCurveLoop(minus_y_tags, ++tally);
+    gmsh::model::geo::addPlaneSurface({tally}, 4);
+    gmsh::model::geo::addCurveLoop(plus_y_tags, ++tally);
+    gmsh::model::geo::addPlaneSurface({tally}, 5);
+    gmsh::model::geo::addCurveLoop(plus_z_tags, ++tally);
+    gmsh::model::geo::addPlaneSurface({tally}, 6);
+    gmsh::model::geo::synchronize();
+
+    //Assemble faces into a boundary representation
+    int sl = gmsh::model::geo::addSurfaceLoop({1,2,3,4,5,6});
+    int ve = gmsh::model::geo::addVolume({sl});
+    gmsh::model::geo::synchronize();
+    gmsh::model::addPhysicalGroup(3, {ve}, 1);
+    gmsh::model::geo::synchronize();
+
+    //Construct the mesh
+    gmsh::model::mesh::generate(3);
+
+    //Extract points and tetrahedra from the mesh
+    gmsh::model::getEntities(entities);
+    for(auto e : entities) {
+        // Dimension and tag of the entity:
+        int dim = e.first, tag = e.second;
+
+        // Get the mesh nodes for the entity (dim, tag):
+        vector<size_t> nodeTags;
+        vector<double> nodeCoords, nodeParams;
+        gmsh::model::mesh::getNodes(nodeTags, nodeCoords, nodeParams, dim, tag);
+
+        if(nodeCoords.size() > 0){
+            points.insert(out_points.end(),nodeCoords.begin(),nodeCoords.end());
+        }
+
+        // Get the mesh elements for the entity (dim, tag):
+        vector<int> elemTypes;
+        vector<vector<size_t> > elemTags, elemNodeTags;
+        gmsh::model::mesh::getElements(elemTypes,elemTags,elemNodeTags,dim,tag);
+
+        if(dim == 3){
+            if(! elemNodeTags.size()) continue;
+            tetrahedra.insert(tetrahedra.begin(), elemNodeTags[0].begin(), elemNodeTags[0].end());
+        }
+    }
+
+    gmsh::finalize();
+
+    //Add an offset to account for preexisting network vertices and adjust for 
+    //one-based indexing in Gmsh
+    for(iter = 0; iter < tetrahedra.size(); iter++){
+        tetrahedra[iter] += offset;
+    }
+
+    //Find tetrahedra containing network vertices
+    for(iter = 0; iter < tetrahedra.size() / 4; iter ++){
+        point_tet_map.insert(make_pair(iter, vector<int>()));
+    }
+
+    tet_bvh = make_shared<NMBVH>(points, tetrahedra, bounds);
+
+    for(iter = 0; iter <= offset; iter ++){
+        assign(query, points, iter);
+        vector<int> hits = containing_polyhedra(query);
+        if(hits.size()){
+            point_tet_map[hits[0]].push_back(iter);
+        }
+        else cerr << "No tetrahedra contained the query point.\n";
+    }
+
+    point_in_tet_ranges.push_back(0);
+    for(auto m_iter = point_tet_map.begin(); m_iter != point_tet_map.end(); m_iter ++){
+        point_in_tet_ranges.push_back(m_iter->second.size());
+        point_in_tet_records.insert(point_in_tet_records.end(), m_iter->second.begin(), m_iter->second.end());
+    }
 }
 
 //After dilution, determine which points are retained in the network, and which
@@ -671,13 +800,13 @@ void RandomNMCBase::compute_angles(){
         idx2 = get<1>(t);
         idx3 = get<2>(t);
 
-        assign(hinge, points, idx1);
-        assign(r1, points, idx2);
+        assign(hinge, points, idx2);
+        assign(r1, points, idx1);
         difference(r1, hinge, r1);
         normalize(r1);
         assign(r2, points, idx3);
         difference(r2, hinge, r2);
-        normalize(r1);
+        normalize(r2);
         cross(r1, r2, normal);
         normalize(normal);
         cross(normal, r1, orth_axis);
@@ -923,7 +1052,7 @@ void cull_edges(Bounds3D bounds, vector<double> in_pts, vector<edge> in_edges, v
     map<Vec3D, int> pmap;
     vector<edge> prelim_edges;
     double length, mean, sdev, min_length;
-    int tally = 0;
+    int tally = 0, idx1, idx2;
 
     mean = sdev = 0;
 
@@ -966,7 +1095,10 @@ void cull_edges(Bounds3D bounds, vector<double> in_pts, vector<edge> in_edges, v
             out_pts.push_back(p2.z);
         }
 
-        prelim_edges.push_back(make_tuple(pmap[p1], pmap[p2]));
+        idx1 = pmap[p1];
+        idx2 = pmap[p2];
+
+        prelim_edges.push_back(make_tuple(idx1, idx2));
     }
 
     //Remove especially short edges
@@ -984,7 +1116,7 @@ void cull_edges(Bounds3D bounds, vector<double> in_pts, vector<edge> in_edges, v
 
 bool RandomPyrochloreNMC::build_network(){
 
-    //Bounds3D wide_bounds;
+    Bounds3D wide_bounds;
     vector<int> faces;
     vector<double> generators, vertices, midpoints;
     map<Vec3D, int> pmap;
@@ -997,36 +1129,25 @@ bool RandomPyrochloreNMC::build_network(){
     vector<edge> wide_edges;
 
     //Use the specified point process to obtain generating points.
-    //wide_bounds = get_wide_bounds(bounds, len_scale);
+    wide_bounds = get_wide_bounds(bounds, len_scale);
     switch(proc){
         case point_process::poisson:
-            //generators = poisson_sphere_packing(wide_bounds, pow(DENSITY_TO_LENGTH/density, 1./3.));
-            generators = poisson_sphere_packing(bounds, pow(DENSITY_TO_LENGTH/density, 1./3.));
+            generators = poisson_sphere_packing(wide_bounds, pow(DENSITY_TO_LENGTH/density, 1./3.));
             break;
         case point_process::lloyd:
-	        //generators = compute_hyperuniform_packing(wide_bounds, density, hu_conv_tol, hu_max_iter);
-	        generators = compute_hyperuniform_packing(bounds, density, hu_conv_tol, hu_max_iter);
+	        generators = compute_hyperuniform_packing(wide_bounds, density, hu_conv_tol, hu_max_iter);
 	        break;
         default:
 	        break;
     }
 
-    /*nx = (int) round(wide_bounds.xrange() / len_scale);
+    nx = (int) round(wide_bounds.xrange() / len_scale);
     ny = (int) round(wide_bounds.yrange() / len_scale);
-    nz = (int) round(wide_bounds.zrange() / len_scale);*/
-    nx = (int) round(bounds.xrange() / len_scale);
-    ny = (int) round(bounds.yrange() / len_scale);
-    nz = (int) round(bounds.zrange() / len_scale);
-
-    //cout << "Volume: " << wide_bounds.get_vol() << endl;
-    cout << "Number of generators: " << generators.size() / 3 << endl;
-    cout << "Target density: " << density << endl;
+    nz = (int) round(wide_bounds.zrange() / len_scale);
 
     //Build a Voronoi tessellation and find all edges. Also record edge
     //midpoints and keep track of all edges with a given end point.
-    //voro::container con(wide_bounds.min_x(), wide_bounds.max_x(), wide_bounds.min_y(), wide_bounds.max_y(), wide_bounds.min_z(), wide_bounds.max_z(), nx, ny, nz, false, false, false, PTS_PER_BOX);
-    //voro::container_periodic con(wide_bounds.max_x(), 0, wide_bounds.max_y(), 0, 0, wide_bounds.max_z(), nx, ny, nz, PTS_PER_BOX);
-    voro::container_periodic con(bounds.max_x(), 0, bounds.max_y(), 0, 0, bounds.max_z(), nx, ny, nz, PTS_PER_BOX);
+    voro::container_periodic con(wide_bounds.max_x(), 0, wide_bounds.max_y(), 0, 0, wide_bounds.max_z(), nx, ny, nz, PTS_PER_BOX);
     for(int iter = 0; iter < generators.size(); iter += 3){
         con.put(iter/3, generators[iter],generators[iter+1],generators[iter+2]);
     }
@@ -1072,8 +1193,6 @@ bool RandomPyrochloreNMC::build_network(){
         } while(cloop.inc());
     }
 
-    cout << "Checkpoint 1\n";
-
     //Construct edges by joining midpoints of adjacent Voronoi edges. Discard
     //any edges wholly outside the tighter bounding box, and trim those that
     //intersect it to size.
@@ -1085,23 +1204,13 @@ bool RandomPyrochloreNMC::build_network(){
         }
     }
 
-    cout << "Number of midpoints: " << midpoints.size() / 3 << endl;
-
-    cout << "Number of edges: " << wide_edges.size() << endl;
-
-    cout << "Checkpoint 2\n";
-
     cull_edges(bounds, midpoints, wide_edges, points, edges);
     //Account for the fact that some edges were rejected for being too short,
     //and some points may need to be ejected and vertex indices may need to be
     //updated.
     reassign_edges_triples();
 
-    cout << "Checkpoint 3\n";
-
     compute_triples();
-
-    cout << "Checkpoint 4\n";
 
     return true;
 }

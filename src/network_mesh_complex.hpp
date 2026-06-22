@@ -32,7 +32,7 @@ class NetworkMeshComplex {
 
         void random_dilute(double p);
 
-        void tetrahedralize();
+        virtual void tetrahedralize();
 
         void set_bounds(Bounds3D new_bounds){
             bounds = new_bounds;
@@ -109,6 +109,8 @@ class LatticeBasedNMC : public NetworkMeshComplex {
             lat_file_name = new_name;
         }
 
+        void tetrahedralize();
+
     protected:
         //Compute triples by finding pairs of consecutive, parallel line
         //segments.
@@ -134,16 +136,35 @@ class RandomNMCBase : public NetworkMeshComplex {
 
         void compute_angles();
 
+        void tetrahedralize();
+
+        vector<int> get_tet_ranges(){
+            return point_in_tet_ranges;
+        }
+
+        vector<int> get_point_in_tet_records(){
+            return point_in_tet_records;
+        }
+
+        unsigned get_num_net_verts(){
+            return num_net_verts;
+        }
+
     protected:
         //Compute triples - series of three points participating in a bending
         //interaction Find the set of edges pairings giving the greatest
 	    //geometric mean angle between pairs of outgoing edges from each vertex.
         void compute_triples();
+        //The number of vertices in the network, as opposed to the tetrahedral
+        //element mesh
+        unsigned num_net_verts;
 	    //Density with which to seed the volume pervaded by the network with
 	    //points
 	    double density;
 	    //Process for generating random points
         point_process proc;
+        //Record of which network vertices are contained in each tetrahedron
+        vector<int> point_in_tet_ranges, point_in_tet_records;
 };
 
 /*
@@ -162,6 +183,7 @@ class RandomPyrochloreNMC : public RandomNMCBase {
             density = my_density;
             proc = my_proc;
             mesh_vol = my_vol;
+            num_net_verts = 0;
         }
 
 	    bool build_network();

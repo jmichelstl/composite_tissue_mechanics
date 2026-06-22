@@ -488,6 +488,393 @@ bool report_network_mesh_complex(char *file_name, shared_ptr<NetworkMeshComplex>
     return true;
 }
 
+//TODO: Finish modifying this function to account for differences in data structures
+bool report_disjoint_network_mesh_complex(char *file_name, shared_ptr<RandomNMCBase> rnmc){
+
+    FILE *output;
+    unsigned raw_size, to_write, comp_coord_size, comp_edge_size,comp_trip_size;
+    unsigned comp_ang_size, comp_tet_size, comp_vr_size, cv_size, goose_egg = 0;
+    void *coord_buf, *edge_buf, *trip_buf, *ang_buf, *tet_buf;
+    void *vert_range_buf, *contained_vert_buf;
+
+    edge_buf = NULL;
+    trip_buf = NULL;
+    ang_buf = NULL;
+    tet_buf = NULL;
+
+    comp_coord_size = comp_edge_size = comp_trip_size = comp_ang_size = comp_tet_size = 0;
+
+    output = fopen(file_name, "w");
+
+    if(output == NULL){
+        cerr << "The output file could not be opened.\n";
+        return false;
+    }
+
+    //Report coordinates
+    vector<double> coordinates = rnmc->get_points();
+    if(coordinates.size() < 3){
+        cerr << "There must be a non-zero number of points.\n";
+	    fclose(output);
+	    return false;
+    }
+
+    raw_size = coordinates.size() / 3;
+    fwrite(&raw_size, sizeof(unsigned), 1, output);
+
+    to_write = 3*raw_size*sizeof(double);
+    coord_buf = malloc(to_write);
+
+    //Note number of network vertices
+    raw_size = rnmc->get_num_net_verts();
+    fwrite(&raw_size, sizeof(unsigned), 1, output);
+
+    if(! coord_buf){
+        cerr << "The coordinate buffer could not be allocated.\n";
+	    fclose(output);
+	    return false;
+    }
+    if(def_to_buf(&coordinates[0], to_write, &coord_buf, to_write, &comp_coord_size) != Z_OK){
+        cerr << "Error writing coordinates.\n";
+	    free(coord_buf);
+	    fclose(output);
+	    return false;
+    }
+    fwrite(&comp_coord_size, sizeof(unsigned), 1, output);
+
+    //Report edges
+    vector<edge> edges = rnmc->get_edges();
+    if(edges.size() > 0){
+        vector<int> edges_simple;
+        for(edge e :  edges){
+            edges_simple.push_back(get<0>(e));
+            edges_simple.push_back(get<1>(e));
+        }
+
+        raw_size = edges_simple.size() / 2;
+        fwrite(&raw_size, sizeof(unsigned), 1, output);
+        to_write = 2*raw_size*sizeof(int);
+        edge_buf = malloc(to_write);
+        if(! edge_buf){
+            cerr << "The edge buffer could not be allocated.\n";
+	        free(coord_buf);
+            fclose(output);
+            return false;
+        }
+        if(def_to_buf(&edges_simple[0], to_write, &edge_buf, to_write, &comp_edge_size) != Z_OK){
+            cerr << "Error writing edges.\n";
+	        free(coord_buf);
+            free(edge_buf);
+            fclose(output);
+            return false;
+         }
+         fwrite(&comp_edge_size, sizeof(unsigned), 1, output);
+    }
+    else{
+         fwrite(&goose_egg, sizeof(unsigned), 1, output);
+         fwrite(&goose_egg, sizeof(unsigned), 1, output);
+    }
+
+    //Report triples and angles
+    vector<triple> trips = rnmc->get_triples();
+    if(trips.size() > 0){
+        vector<int> trips_simple;
+        for(triple t :  trips){
+            trips_simple.push_back(get<0>(t));
+            trips_simple.push_back(get<1>(t));
+            trips_simple.push_back(get<2>(t));
+        }
+        raw_size = trips_simple.size() / 3;
+        fwrite(&raw_size, sizeof(unsigned), 1, output);
+        to_write = 3*raw_size*sizeof(int);
+        trip_buf = malloc(to_write);
+        if(! trip_buf){
+            cerr << "The triple buffer could not be allocated.\n";
+	        free(coord_buf);
+            free(edge_buf);
+            fclose(output);
+            return false;
+        }
+        if(def_to_buf(&trips_simple[0], to_write, &trip_buf, to_write, &comp_trip_size) != Z_OK){
+            cerr << "Error writing edges.\n";
+            free(coord_buf);
+            free(edge_buf);
+	        free(trip_buf);
+            fclose(output);
+	        return false;
+        }
+        fwrite(&comp_trip_size, sizeof(unsigned), 1, output);
+
+        vector<double> angles = rnmc->get_angles();
+        to_write = raw_size*sizeof(double);
+        ang_buf = malloc(to_write);
+        if(! ang_buf){
+            cerr << "The angle buffer could not be allocated.\n";
+	        free(coord_buf);
+            free(edge_buf);
+	        free(trip_buf);
+            fclose(output);
+            return false;
+        }
+        if(def_to_buf(&angles[0], to_write, &ang_buf, to_write, &comp_ang_size) != Z_OK){
+            cerr << "Error writing angles.\n";
+            free(coord_buf);
+            free(edge_buf);
+	        free(trip_buf);
+	        free(ang_buf);
+            fclose(output);
+	        return false;
+        }
+        fwrite(&comp_ang_size, sizeof(unsigned), 1, output);
+    }
+    else{
+         fwrite(&goose_egg, sizeof(unsigned), 1, output);
+         fwrite(&goose_egg, sizeof(unsigned), 1, output);
+         fwrite(&goose_egg, sizeof(unsigned), 1, output);
+    }
+
+    //Report tetrahedra
+    vector<int> tets = rnmc->get_tetrahedra();
+    if(tets.size() > 0){
+        raw_size = tets.size() / 4;
+        fwrite(&raw_size, sizeof(unsigned), 1, output);
+        to_write = 4*raw_size*sizeof(int);
+        tet_buf = malloc(to_write);
+        if(! tet_buf){
+            cerr << "The tetrahedron buffer could not be allocated.\n";
+	        free(coord_buf);
+            if(edge_buf) free(edge_buf);
+	        if(trip_buf) free(trip_buf);
+	        if(trip_buf) free(ang_buf);
+            fclose(output);
+            return false;
+        }
+        if(def_to_buf(&tets[0], to_write, &tet_buf, to_write, &comp_tet_size) != Z_OK){
+            cerr << "Error writing tetrahedra.\n";
+            free(coord_buf);
+            if(edge_buf) free(edge_buf);
+	        if(trip_buf) free(trip_buf);
+	        if(ang_buf) free(ang_buf);
+	        free(tet_buf);
+            fclose(output);
+	        return false;
+        }
+        fwrite(&comp_tet_size, sizeof(unsigned), 1, output);
+
+        //Report network vertices contained within tetrahedra
+        vector<int> tet_ranges = rnmc->get_tet_ranges();
+        to_write = tet_ranges.size()*sizeof(int);
+        vert_range_buf = malloc(to_write);
+        if(! vert_range_buf){
+            cerr << "The tetrahedron buffer could not be allocated.\n";
+	        free(coord_buf);
+            if(edge_buf) free(edge_buf);
+	        if(trip_buf) free(trip_buf);
+	        if(trip_buf) free(ang_buf);
+            free(tet_buf);
+            fclose(output);
+            return false;
+        }
+        if(def_to_buf(&tet_ranges[0], to_write, &vert_range_buf, to_write, &comp_vr_size) != Z_OK){
+            cerr << "Error writing tetrahedra.\n";
+            free(coord_buf);
+            if(edge_buf) free(edge_buf);
+	        if(trip_buf) free(trip_buf);
+	        if(ang_buf) free(ang_buf);
+            free(tet_buf);
+	        free(vert_range_buf);
+            fclose(output);
+	        return false;
+        }
+        fwrite(&comp_vr_size, sizeof(unsigned), 1, output);
+
+        vector<int> points_in_tets = rnmc->get_point_in_tet_records();
+        to_write = points_in_tets.size()*sizeof(int);
+        contained_vert_buf = malloc(to_write);
+        if(! contained_vert_buf){
+            cerr << "The tetrahedron buffer could not be allocated.\n";
+	        free(coord_buf);
+            if(edge_buf) free(edge_buf);
+	        if(trip_buf) free(trip_buf);
+	        if(trip_buf) free(ang_buf);
+            free(tet_buf);
+            free(vert_range_buf);
+            fclose(output);
+            return false;
+        }
+        if(def_to_buf(&points_in_tets[0], to_write, &contained_vert_buf, to_write, &comp_cv_size) != Z_OK){
+            cerr << "Error writing tetrahedra.\n";
+            free(coord_buf);
+            if(edge_buf) free(edge_buf);
+	        if(trip_buf) free(trip_buf);
+	        if(ang_buf) free(ang_buf);
+	        free(tet_buf);
+            free(vert_range_buf);
+            free(contained_vert_buf);
+            fclose(output);
+	        return false;
+        }
+        fwrite(&comp_cv_size, sizeof(unsigned), 1, output);
+    }
+    else{
+         fwrite(&goose_egg, sizeof(unsigned), 1, output);
+         fwrite(&goose_egg, sizeof(unsigned), 1, output);
+    }
+
+    fwrite(coord_buf, sizeof(char), comp_coord_size, output);
+    if(edge_buf){
+        fwrite(edge_buf, sizeof(char), comp_edge_size, output);
+    }
+    if(trip_buf){
+        fwrite(trip_buf, sizeof(char), comp_trip_size, output);
+        fwrite(ang_buf, sizeof(char), comp_ang_size, output);
+    }
+    if(tet_buf){
+        fwrite(tet_buf, sizeof(char), comp_tet_size, output);
+        fwrite(vert_range_buf, sizeof(char), comp_vr_size, output);
+        fwrite(contained_vert_buf, sizeof(char), comp_cv_size, output);
+    }
+
+    free(coord_buf);
+    if(edge_buf) free(edge_buf);
+    if(trip_buf) free(trip_buf);
+    if(ang_buf) free(ang_buf);
+    if(tet_buf){
+        free(tet_buf);
+        free(vert_range_buf);
+        free(contained_vert_buf);
+    }
+    fclose(output);
+
+    return true;
+}
+
+bool extract_disjoint_network_mesh_complex(char *file_name, vector<double> &coordinates, unsigned &num_net_verts, vector<int> &edges, vector<int> &triples, vector<double> &angles, vector<int> &tets, vector<int> &vert_ranges, vector<int> &contained_verts){
+
+    FILE *src;
+    unsigned num_pts, pt_size, num_edges, edge_size, num_trips;
+    unsigned trip_size, ang_size, num_tets, tet_size, vr_size, cv_size;
+    unsigned num_read, size_buf[3];
+    int inf_result;
+
+    src = fopen(file_name, "r");
+    if(src == NULL){
+        cerr << "The NMC file could not be opened for reading.\n";
+        return false;
+    }
+
+    //Attempt to read information about coordinates
+    if((num_read = fread(size_buf, sizeof(unsigned), 3, src)) != 3){
+        cerr << "Information about points could not be read.\n";
+    }
+    else{
+        num_pts = size_buf[0];
+        num_net_verts = size_buf[1];
+        pt_size = size_buf[2];
+    }
+
+    //Attempt to read information about edges
+    if((num_read = fread(size_buf, sizeof(unsigned), 2, src)) != 2){
+        cerr << "Information about edges could not be read.\n";
+    }
+    else{
+        num_edges = size_buf[0];
+        edge_size = size_buf[1];;
+    }
+
+    //Attempt to read information about triples
+    if((num_read = fread(size_buf, sizeof(unsigned), 3, src)) != 3){
+        cerr << "Information about triples could not be read.\n";
+    }
+    else{
+        num_trips = size_buf[0];
+        trip_size = size_buf[1];;
+        ang_size = size_buf[2];;
+    }
+
+    //Attempt to read information about tetrahedra
+    if((num_read = fread(size_buf, sizeof(unsigned), 2, src)) != 2){
+        cerr << "Information about tetrahedra could not be read.\n";
+    }
+    else{
+        num_tets = size_buf[0];
+        tet_size = size_buf[1];;
+    }
+
+    //If there are tetrahedra, read information about network vertices contained
+    //in tetrahedra.
+    if(num_tets > 0){
+        if((num_read = fread(size_buf, sizeof(unsigned), 2, src)) != 2){
+            cerr << "Information about tetrahedron vertex ranges and vertex membership could not be read.\n";
+        }
+        else{
+            vr_size = size_buf[0];
+            vc_size = size_buf[1];
+        }
+    }
+
+    //Attempt to extract coordinates
+    coordinates = vector<double>(num_pts*3, 0);
+    if((inf_result = inf(src, pt_size, &coordinates[0])) != Z_OK){
+        cerr << "Extraction of the coordinates failed.\n";
+        fclose(src);
+        return false;
+    }
+
+    //Attempt to extract edges
+    if(num_edges){
+        edges = vector<int>(num_edges*2, 0);
+        if((inf_result = inf(src, edge_size, &edges[0])) != Z_OK){
+            cerr << "Extraction of the edges failed.\n";
+            fclose(src);
+            return false;
+        }
+    }
+
+    //Attempt to extract triples and angles
+    if(num_trips){
+        triples = vector<int>(num_trips*3, 0);
+        angles = vector<double>(num_trips, 0);
+        if((inf_result = inf(src, trip_size, &triples[0])) != Z_OK){
+            cerr << "Extraction of the triples failed.\n";
+            fclose(src);
+            return false;
+        }
+        if((inf_result = inf(src, ang_size, &angles[0])) != Z_OK){
+            cerr << "Extraction of the angles failed.\n";
+            fclose(src);
+            return false;
+        }
+    }
+
+    //Attempt to extract tetrahedra
+    if(num_tets){
+        tets = vector<int>(num_tets*4, 0);
+        if((inf_result = inf(src, tet_size, &tets[0])) != Z_OK){
+            cerr << "Extraction of the tetrahedra failed.\n";
+            fclose(src);
+            return false;
+        }
+
+        vert_ranges = vector<int>(num_tets+1, 0);
+        if((inf_result = inf(src, vr_size, &vert_ranges[0])) != Z_OK){
+            cerr << "Extraction of the tetrahedron vertex ranges failed.\n";
+            fclose(src);
+            return false;
+        }
+
+        contained_verts = vector<int>(num_net_verts, 0);
+        if((inf_result = inf(src, cv_size, &contained_verts[0])) != Z_OK){
+            cerr << "Extraction of the tetrahedron vertex members failed.\n";
+            fclose(src);
+            return false;
+        }
+    }
+
+    fclose(src);
+    return true;
+}
+
 //Open a manifest describing a relaxation run
 bool open_network_mesh_trajectory(string output, string nmc_file, RelaxParams params, string &xml_name, string &nmt_name){
 
