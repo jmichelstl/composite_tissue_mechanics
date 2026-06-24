@@ -35,7 +35,9 @@ class NMPolyhedron {
 
         virtual ~NMPolyhedron();
 
-        virtual Bounds3D get_bounds(){}
+        Bounds3D get_bounds(){
+            return bounds;
+        }
 
         virtual bool contains(Vec3D point);
 
@@ -51,11 +53,7 @@ class NMTetrahedron : public NMPolyhedron {
 
     public:
 
-        NMTetrahedron(vector<double> coordinates, vector<int> tetrahedra, int my_idx;
-
-        Bounds3D get_bounds(){
-            return bounds;
-        }
+        NMTetrahedron(vector<double> coordinates, vector<int> tetrahedra, int my_idx);
 
         bool contains(Vec3D pt);
 

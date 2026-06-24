@@ -46,7 +46,7 @@ lib/libngru.a:
 
 lib/libnmbvh.a:
 	mkdir -p lib
-	$(gcc) $(ONE_API_INC) -c -o lib/libnmbvh.a src/nmbvh.cpp $(ONE_API_LINK) -ltbb
+	$(gcc) $(ONEAPI_INC) -c -o lib/libnmbvh.a src/nmbvh.cpp $(ONE_API_LINK) -ltbb
 
 nmcbatch: lib/libgeomprim.a lib/libnmc.a lib/libnmio.a lib/librandompointproc.a lib/nmbvh.a
 	$(gcc) $(ONEAPI_INC) -o nmcbatch src/network_mesh_batch.cpp -ltinyxml2 -L/usr/lib/x86_64-linux-gnu/ -lgmsh -L./lib -lgeomprim -lnmc -lnmio -lnmbvh -lz -lvoro++ -lrandompointproc $(ONEAPI_LINK) -ltbb

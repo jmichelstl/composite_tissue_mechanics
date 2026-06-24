@@ -17,9 +17,15 @@ Bounds3D box_union(Bounds3D box1, Bounds3D box2){
     return Bounds3D(minx, maxx, miny, maxy, minz, maxz);
 }
 
+NMPolyhedron::~NMPolyhedron(){}
+
+bool NMPolyhedron::contains(Vec3D pt){
+    return false;
+}
+
 NMTetrahedron::NMTetrahedron(vector<double> coordinates, vector<int> tetrahedra, int my_idx){
 
-    double minx, maxx, miny, maxy, minz, maxy;
+    double minx, maxx, miny, maxy, minz, maxz;
 
     minx = FLT_MAX;
     maxx = -FLT_MAX;
@@ -218,7 +224,7 @@ void NMBVH::index_polyhedra() {
         [&](const tbb::blocked_range<size_t>& r) {
             for(size_t index = r.begin(); index != r.end(); index++){
                 m_info[index].poly_idx = index;
-                m_info[index].morton_code = encode_morton(polyhedra[index].get_bounds.centroid(), bounds.min_x(), bounds.x_range(), bounds.min_y(), bounds.yrange(), bounds.min_z(), bounds.zrange());
+                m_info[index].morton_code = encode_morton(polyhedra[index]->get_bounds().centroid(), bounds.min_x(), bounds.xrange(), bounds.min_y(), bounds.yrange(), bounds.min_z(), bounds.zrange());
             }
         }
     );
@@ -236,17 +242,17 @@ void NMBVH::index_polyhedra() {
 
 NMBVH::NMBVH(vector<double> coordinates, vector<int> tetrahedra, Bounds3D bounds) : bounds(bounds) {
 
-    tbb::concurrent_vector<shared_ptr<NMTetrahedron>> tetrahedra;
+    tbb::concurrent_vector<shared_ptr<NMTetrahedron>> nm_tetrahedra;
 
     //Initialize tetrahedra and add them to the master list of polyhedra
     tbb::parallel_for(tbb::blocked_range<size_t>(0, tetrahedra.size() / 4),
         [&](const tbb::blocked_range<size_t>& r) {
             for(size_t index = r.begin(); index != r.end(); index++){
-                tetrahedra.push_back(make_shared<NMTetrahedron>(coordinates, tetrahedra, index));
+                nm_tetrahedra.push_back(make_shared<NMTetrahedron>(coordinates, tetrahedra, index));
             }
         }
     );
-    polyhedra.assign(tetrahedra.begin(), tetrahedron.end());
+    polyhedra.assign(nm_tetrahedra.begin(), nm_tetrahedra.end());
 
     index_polyhedra();
 }
@@ -281,7 +287,7 @@ vector<int> NMBVH::containing_polyhedra(Vec3D query){
 
     if(s_nodes.size() == 0) return hits;
 
-    search_recursive(hits, query_point, 0);
+    search_recursive(hits, query, 0);
 
     return hits;
 }
