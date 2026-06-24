@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <stdlib.h>
 #include <stdio.h>
+#include <unistd.h>
 
 using namespace std;
 
@@ -215,19 +216,57 @@ int main(int argc, char **argv){
     double min, max, mean, sdev;
     int int_min, int_max;
     vector<double> coordinates, angles, lengths, tet_volumes;
-    vector<int> edges, triples, tets, connectivities;
+    vector<int> edges, triples, tets, vr, cv, connectivities;
     FILE *summary;
-    char *summary_name, *hist_name;
+    string summary_name, hist_name;
+    char c;
+    bool have_input_name, have_output_name, disjoint;
+    unsigned num_net_verts;
 
-    //Validate input
-    if(argc < 3){
-        cerr << "Usage: NMC file, report name base\n";
-        return 1;
+    have_input_name = have_output_name = disjoint = false;
+
+    while((c = getopt(argc, argv, "d:n:o:")) != -1){
+        switch(c){
+            case 'd':
+                if(have_input_name){
+                    cerr << "A redundant input file was specified.\n";
+                }
+                input_name = string(optarg);
+                have_input_name = true;
+                disjoint = true;
+                break;
+            case 'n':
+                if(have_input_name){
+                    cerr << "A redundant input file was specified.\n";
+                }
+                input_name = string(optarg);
+                have_input_name = true;
+                break;
+            case 'o':
+                have_output_name = true;
+                break;
+            default:
+                break;
+        }
     }
 
-    if(! extract_network_mesh_complex(argv[1], coordinates, edges, triples, angles, tets)){
-        cerr << "The specified NMC file could not be parsed.\n";
+    //Validate input
+    if(! have_input_name || ! have_output_name){
+        cerr << "Usage: -n NMC file OR -d DNMC name, -o report name base\n";
         return 2;
+    }
+
+    if(disjoint){
+        if(extract_disjoint_network_mesh_complex((char *)nmc_name.c_str(), coords, num_net_verts, edges, triples, angles, tets, vr, cv)){
+            cerr << "The specified DNMC file could not be parsed.\n";
+            return 3;
+        }
+    }
+    else{
+        if(! extract_network_mesh_complex(argv[1], coordinates, edges, triples, angles, tets)){
+            cerr << "The specified NMC file could not be parsed.\n";
+            return 3;
+        }
     }
 
     summary_name = (char *) malloc(sizeof(char)*(strlen(argv[2]) + SUMMARY_LEN));
@@ -238,7 +277,7 @@ int main(int argc, char **argv){
     summary = fopen(summary_name, "w");
     if(! summary){
         fprintf(stderr, "The file %s could not be opened for writing.\n", summary_name);
-        return 3;
+        return 4;
     }
 
     //Report statistics about the edge length distribution

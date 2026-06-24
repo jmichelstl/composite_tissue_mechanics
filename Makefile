@@ -40,11 +40,19 @@ lib/libnmio.a:
 	mkdir -p lib
 	$(gcc) -c -o lib/libnmio.a src/network_mesh_io.cpp
 
-nmcbatch: lib/libgeomprim.a lib/libnmc.a lib/libnmio.a lib/librandompointproc.a
-	$(gcc) $(ONEAPI_INC) -o nmcbatch src/network_mesh_batch.cpp -ltinyxml2 -L/usr/lib/x86_64-linux-gnu/ -lgmsh -L./lib -lgeomprim -lnmc -lnmio -lz -lvoro++ -lrandompointproc $(ONEAPI_LINK) -ltbb
+lib/libngru.a:
+	mkdir -p lib
+	$(gcc) -c -o lib/libngru.a src/network_gel_relax_utils.hpp
 
-ngrelax: lib/libgeomprim.a lib/libflists.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a
-	$(gcc) $(ONEAPI_INC) -o ngrelax src/relax_network_gel_composite.cpp -L./lib -lgeomprim -lnmc -lnmio -lflists -lrandompointproc -lgmsh -lz $(ONEAPI_LINK) -ltbb $(MKL_LINK) -ltinyxml2 -lboost_filesystem -lboost_regex -lvoro++
+lib/libnmbvh.a:
+	mkdir -p lib
+	$(gcc) $(ONE_API_INC) -c -o lib/libnmbvh.a src/nmbvh.cpp $(ONE_API_LINK) -ltbb
+
+nmcbatch: lib/libgeomprim.a lib/libnmc.a lib/libnmio.a lib/librandompointproc.a lib/nmbvh.a
+	$(gcc) $(ONEAPI_INC) -o nmcbatch src/network_mesh_batch.cpp -ltinyxml2 -L/usr/lib/x86_64-linux-gnu/ -lgmsh -L./lib -lgeomprim -lnmc -lnmio -lnmbvh -lz -lvoro++ -lrandompointproc $(ONEAPI_LINK) -ltbb
+
+ngrelax: lib/libgeomprim.a lib/libflists.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a lib/libngru.a
+	$(gcc) $(ONEAPI_INC) -o ngrelax src/relax_network_gel_composite.cpp -L./lib -lgeomprim -lnmc -lnmio -lflists -lrandompointproc -lngru -lgmsh -lz $(ONEAPI_LINK) -ltbb $(MKL_LINK) -ltinyxml2 -lboost_filesystem -lboost_regex -lvoro++
 
 nmtraj_viz: lib/libgeomprim.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a
 	$(gcc) $(VTK_INC) -o nmtraj_viz src/visualize_network_mesh.cpp -L./lib -lgeomprim -lnmc -lnmio -lrandompointproc -lgmsh -lz -lvoro++ $(VTK_LINK) $(ONEAPI_LINK) -ltbb
@@ -79,6 +87,12 @@ vizclean:
 statclean:
 	rm -f nmc_stats
 
+bvhclean:
+	rm -f lib/libnmbvh.a
+
+ngruclean:
+	rm -f lib/libngru.a
+
 clean:
 	rm lib/libgeomprim.a
 	rm lib/libflists.a
@@ -89,3 +103,5 @@ clean:
 	rm -f nglreax
 	rm -f nmtraj_viz
 	rm -f nmc_stats
+	rm -f lib/libnmbvh.a
+	rm -f lib/libngru.a

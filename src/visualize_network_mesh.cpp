@@ -144,22 +144,36 @@ string vtk_name(string base, int seq_num, int dec_digits){
 int main(int argc, char **argv){
 
     string nmc_name, output_base, xml_name, traj_name;
-    bool have_nmc_name, have_output_name , have_traj_name;
+    bool have_nmc_name, have_output_name , have_traj_name, disjoint;
     vector<double> coords, angles;
-    vector<int> edges, trips, tets; 
+    vector<int> edges, trips, tets, vert_ranges, contained_verts; 
     NMCRelaxationRun run;
     FILE *nmt_handle;
     ostringstream oss;
     int dec_digits, seq_num, zlib_status;
     char c;
+    unsigned num_net_verts;
 
-    have_nmc_name = have_output_name = have_traj_name = false;
+    have_nmc_name = have_output_name = have_traj_name = disjoint = false;
 
     //Look for arguments for the NMC file, trajectory name pattern, and output
     //name pattern
-    while((c = getopt(argc, argv, "n:t:o:")) != -1){
+    while((c = getopt(argc, argv, "d:n:t:o:")) != -1){
         switch(c) {
+            case 'd':
+                if(have_nmc_name){
+                    cerr << "A network-mesh file was specified more than once.\n";
+                    return 1;
+                }
+                nmc_name = string(optarg);
+                have_nmc_name = true;
+                disjoint = true;
+                break;
             case 'n':
+                if(have_nmc_name){
+                    cerr << "A network-mesh file was specified more than once.\n";
+                    return 1;
+                }
                 nmc_name = string(optarg);
                 have_nmc_name = true;
                 break;
@@ -202,9 +216,17 @@ int main(int argc, char **argv){
     }
 
     //Attempt to read the Network Mesh Complex structure
-    if(! extract_network_mesh_complex((char *) nmc_name.c_str(), coords, edges, trips, angles, tets)){
-        cerr << "The NMC file could not be read.\n";
-        return 3;
+    if(disjoint){
+        if(! extract_disjoint_network_mesh_complex((char *)nmc_name.c_str(), coords, num_net_verts, edges, trips, angles, tets, vert_ranges, contained_verts)){
+            cerr << "The DNMC file could not be read.\n";
+            return 3;
+        }
+    }
+    else{
+        if(! extract_network_mesh_complex((char *) nmc_name.c_str(), coords, edges, trips, angles, tets)){
+            cerr << "The NMC file could not be read.\n";
+            return 3;
+        }
     }
 
     //If specified, attempt to read the description of the relaxation trajectory
