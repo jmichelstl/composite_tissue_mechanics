@@ -386,8 +386,8 @@ bool parse_nmc_batch_file(string file_name, NMCJob &job){
                     batch_file.close();
                     return false;
                 }
-                else if(max_vol <= 0){
-                    cerr << "The maximum volume must be positive.\n";
+                else if(max_vol < 0){
+                    cerr << "The maximum volume must be non-negative.\n";
                     batch_file.close();
                     return false;
                 }
@@ -429,11 +429,11 @@ bool parse_nmc_batch_file(string file_name, NMCJob &job){
 
 //Generate an output file name when nothing needs to be appended to the base 
 //name but a file extension
-string output_name_simple(string base){
+string output_name_simple(string base, string ext){
 
     ostringstream oss;
 
-    oss << base << ".nmc";
+    oss << base << ext;
 
     return oss.str();
 }
@@ -441,7 +441,7 @@ string output_name_simple(string base){
 //Given a base name, a number of decimal digits for reporting a bond occupation
 //probability and a sequence number, and the accompanying BOP and sequence #,
 //construct an output file name.
-string output_name_verbose(string base, int bop_digits, int total_seq_digits, double bop, int seq_num){
+string output_name_verbose(string base, int bop_digits, int total_seq_digits, double bop, int seq_num, string ext){
 
     ostringstream oss;
     int curr_seq_digits, bop_rep;
@@ -456,7 +456,7 @@ string output_name_verbose(string base, int bop_digits, int total_seq_digits, do
     for(int iter = 0; iter < total_seq_digits - curr_seq_digits; iter ++){
         oss << "0";
     }
-    oss << seq_num << ".nmc";
+    oss << seq_num << ext;
 
     return oss.str();
 }
@@ -469,7 +469,7 @@ string output_name_verbose(string base, int bop_digits, int total_seq_digits, do
 void lattice_based_batch(NMCJob job, bool use_verbose, int real_dec_digits){
 
     double bop;
-    string output_name;
+    string output_name, ext = ".nmc";
 
     //Create a fully connected network. Copies of this network can be diluted
     //as needed.
@@ -482,16 +482,16 @@ void lattice_based_batch(NMCJob job, bool use_verbose, int real_dec_digits){
 
             //Generate the output name and report the structure to a file
             if(use_verbose){
-                output_name = output_name_verbose(job.base_name, job.bop_par.dec_digits, real_dec_digits, bop, iter);
+                output_name = output_name_verbose(job.base_name, job.bop_par.dec_digits, real_dec_digits, bop, iter, ext);
             }
-            else output_name = output_name_simple(job.base_name);
+            else output_name = output_name_simple(job.base_name, ext);
 
             //Build and dilute a network copy and tetrahedralize its convex hull
             shared_ptr<LatticeBasedNMC> lbnmc_copy = make_shared<LatticeBasedNMC>(*lbnmc);
             if(bop < 1){
                 lbnmc_copy->random_dilute(bop);
             }
-            lbnmc_copy->tetrahedralize();
+            if(job.max_vol > 0) lbnmc_copy->tetrahedralize();
             report_network_mesh_complex((char *) output_name.c_str(), lbnmc_copy);
         }
     }
@@ -500,17 +500,20 @@ void lattice_based_batch(NMCJob job, bool use_verbose, int real_dec_digits){
 void off_lattice_batch(NMCJob job, bool use_verbose, int real_dec_digits){
 
     double bop;
-    string output_name;
+    string output_name, ext;
     shared_ptr<OffLatticeParams> olp = static_pointer_cast<OffLatticeParams>(job.constr_par);
+
+    if(job.max_vol > 0) ext = ".dnmc";
+    else ext = ".nmc";
 
     for(bop = job.bop_par.min; bop <= job.bop_par.max; bop += job.bop_par.inc){
         for(int iter = 1; iter <= job.realizations; iter++){
 
             //Generate the output name and report the structure to a file
             if(use_verbose){
-                output_name = output_name_verbose(job.base_name, job.bop_par.dec_digits, real_dec_digits, bop, iter);
+                output_name = output_name_verbose(job.base_name, job.bop_par.dec_digits, real_dec_digits, bop, iter, ext);
             }
-            else output_name = output_name_simple(job.base_name);
+            else output_name = output_name_simple(job.base_name, ext);
 
             //Build the network and tetrahedralize its convex hull
             
@@ -522,8 +525,15 @@ void off_lattice_batch(NMCJob job, bool use_verbose, int real_dec_digits){
                 if(bop < 1){
                     rpnmc->random_dilute(bop);
                 }
-                rpnmc->tetrahedralize();
-                report_network_mesh_complex((char *) output_name.c_str(), rpnmc);
+
+                if(job.max_vol > 0){
+                    rpnmc->tetrahedralize();
+                
+                    report_disjoint_network_mesh_complex((char *) output_name.c_str(), rpnmc);
+                }
+                else{
+                    report_network_mesh_complex((char *) output_name.c_str(), rpnmc);
+                }
             }
         }
     }
