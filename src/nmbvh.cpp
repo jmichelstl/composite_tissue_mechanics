@@ -67,7 +67,7 @@ bool NMTetrahedron::contains(Vec3D pt){
     if(proj_2 < 0 || proj_2 > 1 - proj_1) return false;
 
     proj_3 = dot(diff, d3);
-    return proj_3 >= 0 && proj_2 <= 1 - proj_1 - proj_2;
+    return proj_3 >= 0 && proj_3 <= 1 - proj_1 - proj_2;
 }
 
 //Node type for building a bounding volume hierarchy

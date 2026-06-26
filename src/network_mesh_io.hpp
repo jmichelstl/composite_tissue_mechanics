@@ -1,3 +1,6 @@
+#ifndef NMIO
+#define NMIO
+
 #include <vector>
 #include <stdio.h> 
 #include <iostream> 
@@ -94,3 +97,5 @@ string report_name(string base, int num_digits, int count, string ext);
 
 //Inflate compressed data
 int inf(FILE *source, unsigned size, void *dest);
+
+#endif

@@ -493,7 +493,7 @@ bool report_disjoint_network_mesh_complex(char *file_name, shared_ptr<RandomNMCB
 
     FILE *output;
     unsigned raw_size, to_write, comp_coord_size, comp_edge_size,comp_trip_size;
-    unsigned comp_ang_size, comp_tet_size, comp_vr_size, cv_size, goose_egg = 0;
+    unsigned comp_ang_size, comp_tet_size, comp_vr_size, comp_cv_size, goose_egg = 0;
     void *coord_buf, *edge_buf, *trip_buf, *ang_buf, *tet_buf;
     void *vert_range_buf, *contained_vert_buf;
 
@@ -809,7 +809,7 @@ bool extract_disjoint_network_mesh_complex(char *file_name, vector<double> &coor
         }
         else{
             vr_size = size_buf[0];
-            vc_size = size_buf[1];
+            cv_size = size_buf[1];
         }
     }
 

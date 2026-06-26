@@ -41,8 +41,6 @@
 //The small dilation to apply to the network to obtain its bulk modulus
 #define TRIAL_D 1e-6
 
-#define BENDING_TOL 1e-12
-
 using namespace std;
 
 //Struct used in structural relaxation
@@ -276,7 +274,7 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
 
     //Method to toggle between unified and disjoint methods for computing
     //forces, without having to use large numbers of conditional evaluations
-    void(*force_func)(NetworkMeshData &arg1, double arg2, double arg3, double arg4, double arg4, double arg5, double arg6, double arg7, vector<double> &arg8);
+    void(*force_func)(NetworkMeshData &arg1, double arg2, double arg3, double arg4, double arg5, double arg6, double arg7, vector<double> &arg8);
 
     dim = nmd.points.size();
     offset = 3*nmd.num_net_verts;
@@ -343,7 +341,7 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
 	        //Forces a short distance away along the current search direction
             grad_dir_prod = -cblas_ddot(num_dof,&forces[offset],1,&search_dir[0],1);
             ls_coeff *= grad_dir_prod / (prev_grad_dir_prod - grad_dir_prod);
-            cblas_daxpy(num_dof, ls_coeff, &search_dir[0], 1, &(points[offset]), 1);
+            cblas_daxpy(num_dof, ls_coeff, &search_dir[0], 1, &(nmd.points[offset]), 1);
 
             //compute_forces(points, top, bottom, edges, lengths, triples, angles, tets, volumes, inv_mats,  ks, kb, gmod, delta, kt_o_omega, chi, forces);
             force_func(nmd, ks, kb, gmod, delta, kt_o_omega, chi, forces);
@@ -382,7 +380,7 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
 //vertices.
 double total_energy_us(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double kt_o_omega, double chi){
 
-    energy = 0;
+    double energy = 0;
 
     if(ks > 0 && nmd.edges.size() > 0){
         energy += stretching_energy(nmd.points, nmd.edges, nmd.lengths, ks);
@@ -393,7 +391,7 @@ double total_energy_us(NetworkMeshData &nmd, double ks, double kb, double gmod, 
     }
 
     if(nmd.tetrahedra.size() > 0){
-        energy += calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, g, excess_osm, kt_o_omega, chi);
+        energy += calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, gmod, delta, kt_o_omega, chi);
     }
 
     return energy;
@@ -404,7 +402,7 @@ double total_energy_us(NetworkMeshData &nmd, double ks, double kb, double gmod, 
 //a disjoint set relative to the gel vertices.
 double total_energy_ds(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double kt_o_omega, double chi){
 
-    energy = 0;
+    double energy = 0;
 
     if(ks > 0 && nmd.edges.size() > 0){
         energy += stretching_energy(nmd.points, nmd.edges, nmd.lengths, ks);
@@ -415,7 +413,7 @@ double total_energy_ds(NetworkMeshData &nmd, double ks, double kb, double gmod, 
     }
 
     if(nmd.tetrahedra.size() > 0){
-        energy += calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, reference_points, nmd.vertex_ranges, nmd.contained_vertices, g, excess_osm, kt_o_omega, chi);
+        energy += calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, gmod, delta, kt_o_omega, chi);
     }
 
     return energy;
@@ -424,7 +422,7 @@ double total_energy_ds(NetworkMeshData &nmd, double ks, double kb, double gmod, 
 //int cgtr_relax(vector<double> &points, unordered_set<int> bottom, unordered_set<int> top, vector<int> edges, vector<double> lengths, vector<int> triples, vector<double> angles, vector<int> tets, vector<double> volumes, vector<double> inv_mats, vector<double> mech_params, CGTRParams cgtrpar, double &f_rms){
 int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtrpar, double &f_rms){
 
-    int num_dof, max_outer, max_inner, n_outer, n_inner;
+    int dim, num_dof, offset, max_outer, max_inner, n_outer, n_inner;
     double max_radius, min_ratio, conv_tol_sqr, radius, cf_model_ratio, curr_cf;
     double prev_cf, curr_mod, prev_mod, sd_hess_norm, ls_coeff, fmag_sqr;
     double fmag_sqr_0, ks, kb, gmod, delta, kt_o_omega, chi, dir_coeff, a, b, c;
@@ -434,10 +432,12 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
 
     //Means of toggling between the unified and disjoint methods for
     //computing forces
-    void(*force_func)(NetworkMeshData &arg1, double arg2, double arg3, double arg4, double arg4, double arg5, double arg6, double arg7, vector<double> &arg8);
-    void(*energy_func)(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double delta_o_omega, double chi);
+    void(*force_func)(NetworkMeshData &arg1, double arg2, double arg3, double arg4, double arg5, double arg6, double arg7, vector<double> &arg8);
+    double(*energy_func)(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double delta_o_omega, double chi);
 
-    num_dof = nmd.points.size();
+    dim = nmd.points.size();
+    offset = 3*nmd.num_net_verts;
+    num_dof = nmd.points.size() - offset;
 
     //Unpack relaxation parameters and physical parameters
     max_outer = cgtrpar.max_outer;    
@@ -453,9 +453,9 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
     kt_o_omega = mech_params[4];
     chi = mech_params[5];
 
-    forces = vector<double>(num_dof, 0);
+    forces = vector<double>(dim, 0);
     search_dir = vector<double>(num_dof, 0);
-    hess_dir_proj = vector<double>(num_dof, 0);
+    hess_dir_proj = vector<double>(dim, 0);
     step = vector<double>(num_dof, 0);
 
     if(nmd.type == nmc_type::unified){
@@ -469,7 +469,7 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
 
     //Evaluate the energy and forces at the outset
     //compute_forces(points, top, bottom, edges, lengths, triples, angles, tets, volumes, inv_mats,  ks, kb, gmod, delta, kt_o_omega, chi, forces);
-    compute_forces(nmd,  ks, kb, gmod, delta, kt_o_omega, chi, forces);
+    force_func(nmd,  ks, kb, gmod, delta, kt_o_omega, chi, forces);
     fmag_sqr_0 = cblas_ddot(num_dof, &forces[offset], 1, &forces[offset], 1);
     fmag_sqr = fmag_sqr_0;
     radius = max_radius;
@@ -568,7 +568,7 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
         //Evaluate the energy after a step is proposed, and compare the actual
         //and expected reduction. Modify the trust radius as appropriate, and
         //decide whether to keep the search step.
-        cblas_daxpy(num_dof, 1., &step[0], 1, &(points[offset]), 1);
+        cblas_daxpy(num_dof, 1., &step[0], 1, &(nmd.points[offset]), 1);
 
         curr_cf = energy_func(nmd, ks, kb, gmod, delta, kt_o_omega, chi);
         cf_model_ratio = (prev_cf - curr_cf) / (prev_cf - mod_val); 
@@ -630,7 +630,7 @@ int parallel_nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGPa
         force_func = compute_forces_unified_parallel;
     }
     else {
-        force_func = comput_forces_disjoint_parallel;
+        force_func = compute_forces_disjoint_parallel;
     }
 
     dim = nmd.points.size();
@@ -645,9 +645,9 @@ int parallel_nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGPa
 
     //Determine how jobs should be allotted to threads for each type of force
     //to be computed.
-    stretch_assignments = job_assignments(edges.size()/2, n_threads);
-    bend_assignments = job_assignments(triples.size()/3, n_threads);
-    gel_assignments = job_assignments(tets.size()/4, n_threads);
+    stretch_assignments = job_assignments(nmd.edges.size()/2, n_threads);
+    bend_assignments = job_assignments(nmd.triples.size()/3, n_threads);
+    gel_assignments = job_assignments(nmd.tetrahedra.size()/4, n_threads);
 
     forces = vector<double>(dim, 0);
     search_dir = vector<double>(num_dof, 0);
@@ -739,15 +739,15 @@ double total_energy_up(NetworkMeshData &nmd, double ks, double kb, double gmod, 
 
     double energy = 0;
 
-    if(nmd.edges > 0){
+    if(nmd.edges.size() > 0){
         energy += parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, ks);
     }
 
-    if(nmd.triples > 0){
+    if(nmd.triples.size() > 0){
         energy += parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, kb);
     }
 
-    energy += parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, gmod, excess_osm, kt_o_omega, chi);
+    energy += parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, gmod, delta, kt_o_omega, chi);
 
     return energy;
 }
@@ -758,15 +758,15 @@ double total_energy_dp(NetworkMeshData &nmd, double ks, double kb, double gmod, 
 
     double energy = 0;
 
-    if(nmd.edges > 0){
+    if(nmd.edges.size() > 0){
         energy += parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, ks);
     }
 
-    if(nmd.triples > 0){
+    if(nmd.triples.size() > 0){
         energy += parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, kb);
     }
 
-    energy += parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, gmod, excess_osm, kt_o_omega, chi);
+    energy += parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, gmod, delta, kt_o_omega, chi);
 
     return energy;
 }
@@ -809,9 +809,9 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
     }
     //Determine how jobs should be allotted to threads for each type of force
     //to be computed.
-    stretch_assignments = job_assignments(edges.size()/2, n_threads);
-    bend_assignments = job_assignments(triples.size()/3, n_threads);
-    gel_assignments = job_assignments(tets.size()/4, n_threads);
+    stretch_assignments = job_assignments(nmd.edges.size()/2, n_threads);
+    bend_assignments = job_assignments(nmd.triples.size()/3, n_threads);
+    gel_assignments = job_assignments(nmd.tetrahedra.size()/4, n_threads);
 
     //Unpack relaxation parameters and physical parameters
     max_outer = cgtrpar.max_outer;    
@@ -1068,12 +1068,7 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     nmd.reference_points.assign(nmd.points.begin(), nmd.points.begin()+3*nmd.num_net_verts);
 
     //Find matrices for computing local affine transformations
-    if(type == nmc_type::unified){
-        get_inv_mats_unified(nmd);
-    }
-    else{
-        get_inv_mats_disjoint(nmd);
-    }
+    get_inv_mats(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.type);
 
     //If the network-mesh complex is disjoint, initialize a SuiteSparse CHOLMOD
     //context and find the sparse matrix mapping network forces onto gel forces
@@ -1084,9 +1079,9 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
 
     dilate_vertices(nmd.points, nmd.bounds, swelling);
     total_displacement = Vec3D(0, 0, 0);
-    estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, nmd.mech_params[0]);
+    estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
     cout << "Stretching energy after dilation: " << estretch << endl;
-    egel = calc_gel_energy(nmd.points, nmd.elements, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+    egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
     cout << "Gel energy: " << egel << endl;
 
     /*minx = FLT_MAX;
@@ -1118,14 +1113,14 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     ct = clock() - ct;
 
     if(! parallel){
-        estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, nmd.mech_params[0]);
+        estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
 	    ebend = fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-        egel = calc_gel_energy(nmd.points, nmd.elements, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
     }
     else{
         estretch = parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
 	    ebend = parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-	    egel = parallel_calc_gel_energy(nmd.points, nmd.elements, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+	    egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
     }
     report_edata(edat_file, total_displacement, estretch, ebend, egel);
     log_entry(log_file, f_rms, n_steps, ct);
@@ -1231,12 +1226,12 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
                     if(! parallel){
                         estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
                         ebend = fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                        egel = calc_gel_energy(nmd.points, nmd.elements, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                        egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
                     }
                     else{
                         estretch = parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
                         ebend = parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                        egel = parallel_calc_gel_energy(nmd.points, nmd.elements, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                        egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
                     }
                     report_edata(edat_file, total_displacement, estretch, ebend, egel);
                     log_entry(log_file, f_rms, n_steps, ct);
@@ -1276,12 +1271,12 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
                 if(! parallel){
                     estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
                     ebend = fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                    egel = calc_gel_energy(nmd.points, nmd.elements, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                    egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
                 }
                 else{
                     estretch = parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
                     ebend = parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                    egel = parallel_calc_gel_energy(nmd.points, nmd.elements, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                    egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
                 }
                 report_edata(edat_file, total_displacement, estretch, ebend, egel);
                 log_entry(log_file, f_rms, n_steps, ct);
@@ -1314,8 +1309,8 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     }
 
     //If the network-mesh complex is disjoint, free sparse matrix resources
-    if(type = nmc_type::disjoint){
-        cholmod_l_free_sparse(&nmd.force_map, &(nmd.common));
+    if(type == nmc_type::disjoint){
+        cholmod_l_free_sparse(&nmd.force_mapping, &(nmd.common));
         cholmod_l_finish(&(nmd.common));
     }
 }

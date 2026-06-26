@@ -218,7 +218,8 @@ int main(int argc, char **argv){
     vector<double> coordinates, angles, lengths, tet_volumes;
     vector<int> edges, triples, tets, vr, cv, connectivities;
     FILE *summary;
-    string summary_name, hist_name;
+    string input_name, output_base;
+    char *summary_name, *hist_name;
     char c;
     bool have_input_name, have_output_name, disjoint;
     unsigned num_net_verts;
@@ -243,6 +244,7 @@ int main(int argc, char **argv){
                 have_input_name = true;
                 break;
             case 'o':
+                output_base = string(optarg);
                 have_output_name = true;
                 break;
             default:
@@ -257,53 +259,57 @@ int main(int argc, char **argv){
     }
 
     if(disjoint){
-        if(extract_disjoint_network_mesh_complex((char *)nmc_name.c_str(), coords, num_net_verts, edges, triples, angles, tets, vr, cv)){
+        if(extract_disjoint_network_mesh_complex((char *)input_name.c_str(), coordinates, num_net_verts, edges, triples, angles, tets, vr, cv)){
             cerr << "The specified DNMC file could not be parsed.\n";
             return 3;
         }
     }
     else{
-        if(! extract_network_mesh_complex(argv[1], coordinates, edges, triples, angles, tets)){
+        if(! extract_network_mesh_complex((char *) input_name.c_str(), coordinates, edges, triples, angles, tets)){
             cerr << "The specified NMC file could not be parsed.\n";
             return 3;
         }
     }
 
-    summary_name = (char *) malloc(sizeof(char)*(strlen(argv[2]) + SUMMARY_LEN));
-    hist_name = (char *) malloc(sizeof(char)*(strlen(argv[2]) + MAX_STR_LEN));
+    summary_name = (char *) malloc(sizeof(char)*(strlen(output_base.c_str()) + SUMMARY_LEN));
+    hist_name = (char *) malloc(sizeof(char)*(strlen(output_base.c_str()) + MAX_STR_LEN));
 
     //Make sure the summary can be opened
-    sprintf(summary_name, "%s%s", argv[2], endings[0]);
+    sprintf(summary_name, "%s%s", output_base.c_str(), endings[0]);
     summary = fopen(summary_name, "w");
     if(! summary){
         fprintf(stderr, "The file %s could not be opened for writing.\n", summary_name);
+        free(summary_name);
+        free(hist_name);
         return 4;
     }
 
     //Report statistics about the edge length distribution
     lengths = compute_edge_lengths(coordinates, edges);
-    sprintf(hist_name, "%s%s", argv[2], endings[1]);
+    sprintf(hist_name, "%s%s", output_base.c_str(), endings[1]);
     compute_histogram(lengths, min, max, mean, sdev, hist_name);
     report_summary_line(summary, "Edge lengths", lengths.size(), min, max, mean, sdev);
 
     //Compute and report the distribution of vertex connectivities
     connectivities = vertex_connectivities(edges);
-    sprintf(hist_name, "%s%s", argv[2], endings[2]);
+    sprintf(hist_name, "%s%s", output_base.c_str(), endings[2]);
     compute_integer_histogram(connectivities, int_min, int_max, mean, sdev, hist_name);
     report_integer_summary_line(summary, "Connectivities", connectivities.size(), int_min, int_max, mean, sdev);
 
     //Report statistics about the angle distribution
-    sprintf(hist_name, "%s%s", argv[2], endings[3]);
+    sprintf(hist_name, "%s%s", output_base.c_str(), endings[3]);
     compute_histogram(angles, min, max, mean, sdev, hist_name);
     report_summary_line(summary, "Angles", angles.size(), min, max, mean, sdev);
 
     //Report statistics about the tetrahedron volume distribution
     tet_volumes = calc_volumes(coordinates, tets);
-    sprintf(hist_name, "%s%s", argv[2], endings[4]);
+    sprintf(hist_name, "%s%s", output_base.c_str(), endings[4]);
     compute_histogram(tet_volumes, min, max, mean, sdev, hist_name);
     report_summary_line(summary, "Tetrahedron volumes", tet_volumes.size(), min, max, mean, sdev);
 
     fclose(summary);
+    free(summary_name);
+    free(hist_name);
 
     return 0;
 }

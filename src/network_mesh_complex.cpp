@@ -196,6 +196,8 @@ inline void create_face(double lc, double s1, double s2, set<Vec3D> points, Vec3
 
 NetworkMeshComplex::~NetworkMeshComplex(){}
 
+void NetworkMeshComplex::tetrahedralize(){}
+
 //Given a set of points to be included in a mesh, network edges, and the maximum
 //volume for a mesh cell, find the x, y and z bounds, create an axis-aligned 
 //rectuangular prism spanning these bounds, enforce inclusion of all specified 
@@ -408,6 +410,7 @@ void RandomNMCBase::tetrahedralize(){
     int iter, tally, offset;
     double lc, minx, maxx, miny, maxy, minz, maxz;
     map<Vec3D, int> pmap;
+    vector<set<Vec3D>> face_sets;
     vector<int> minus_x_tags, plus_x_tags, minus_y_tags, plus_y_tags, minus_z_tags, plus_z_tags;
     vector<pair<int, int>> entities;
     map<pair<int, int>, int> emap;
@@ -484,7 +487,7 @@ void RandomNMCBase::tetrahedralize(){
         gmsh::model::mesh::getNodes(nodeTags, nodeCoords, nodeParams, dim, tag);
 
         if(nodeCoords.size() > 0){
-            points.insert(out_points.end(),nodeCoords.begin(),nodeCoords.end());
+            points.insert(points.end(),nodeCoords.begin(),nodeCoords.end());
         }
 
         // Get the mesh elements for the entity (dim, tag):
@@ -515,7 +518,7 @@ void RandomNMCBase::tetrahedralize(){
 
     for(iter = 0; iter <= offset; iter ++){
         assign(query, points, iter);
-        vector<int> hits = containing_polyhedra(query);
+        vector<int> hits = tet_bvh->containing_polyhedra(query);
         if(hits.size()){
             point_tet_map[hits[0]].push_back(iter);
         }

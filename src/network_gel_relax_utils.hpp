@@ -15,8 +15,13 @@
 #include <suitesparse/cholmod.h>
 #include <functional>
 #include <tbb.h>
+#include <mkl_cblas.h>
+#include "geometric_primitives.hpp"
+#include "network_mesh_io.hpp"
 
 using namespace std;
+
+#define BENDING_TOL 1e-12
 
 //Means of classifying the use case - either the network vertices are a proper
 //subset of mesh vertices (unified), or the network vertices are separate
@@ -61,7 +66,7 @@ bool parse_nmc_file(string file_name, NetworkMeshData &nmd);
 
 //Function to support a computation of a map from network forces to
 //contributions to forces on mesh vertices
-void compute_network_mesh_map(NetworkMeshData &nmd);
+bool compute_network_mesh_map(NetworkMeshData &nmd);
 
 //Utility function for the parallel summation of arrays
 template <typename T> T sum_reduce(const T* first, const T* last, T identity);
@@ -83,13 +88,13 @@ double stretching_energy(vector<double> points, vector<int> edges, vector<double
 
 void stretching_energy_worker(vector<double> points, vector<int> edges, vector<double> lengths, double k, int index, double *energy);
 
-void parallel_stretching_energy(vector<double> points, vector<int> edges, vector<double> lengths, double ks);
+double parallel_stretching_energy(vector<double> points, vector<int> edges, vector<double> lengths, double ks);
 
 void bending_forces(vector<double> pts, vector<int> triples, vector<double> angles, double kb, vector<double> &forces, int start, int end);
 
 void bending_forces(vector<double> pts, vector<int> triples, vector<double> angles, double kb, vector<double> &forces, int start, int end);
 
-double fiber_bending_energy(vector<double> points, vector<int> triples, vector<double> angles, double kb){
+double fiber_bending_energy(vector<double> points, vector<int> triples, vector<double> angles, double kb);
 
 double parallel_fiber_bending_energy(vector<double> points, vector<int> triples,vector<double> angles, double kb);
 

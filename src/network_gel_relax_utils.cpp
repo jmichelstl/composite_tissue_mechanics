@@ -1,4 +1,6 @@
 #include "network_gel_relax_utils.hpp"
+#include <cfloat>
+#include <iostream>
 
 //Utility function for the parallel summation of arrays
 template <typename T> T sum_reduce(const T* first, const T* last, T identity){
@@ -50,11 +52,11 @@ void calc_volumes(NetworkMeshData &nmd){
 
     Vec3D p1, p2, p3, p4, d1, d2, d3, cross_prod;
 
-    for(int iter = 0; iter < nmd.tets.size() / 4; iter ++){
-        load_coords(nmd.points, tets[iter*4], p1);
-        load_coords(nmd.points, tets[iter*4+1], p2);
-        load_coords(nmd.points, tets[iter*4+2], p3);
-        load_coords(nmd.points, tets[iter*4+3], p4);
+    for(int iter = 0; iter < nmd.tetrahedra.size() / 4; iter ++){
+        load_coords(nmd.points, nmd.tetrahedra[iter*4], p1);
+        load_coords(nmd.points, nmd.tetrahedra[iter*4+1], p2);
+        load_coords(nmd.points, nmd.tetrahedra[iter*4+2], p3);
+        load_coords(nmd.points, nmd.tetrahedra[iter*4+3], p4);
 
         difference(p2, p1, d1);
         difference(p3, p1, d2);
@@ -571,7 +573,7 @@ void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<dou
 
     vector<double> inv_mat;
 
-    ref_coord[3] = 1.
+    ref_coord[3] = 1.;
     for(i = 12; i < 16; i++) x[i] = 1.;
 
     for(int tet_idx = start; tet_idx != end; tet_idx ++){
@@ -605,7 +607,7 @@ void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<dou
 	    //components of the deformation gradient tensor.
         det = a[0]*(a[5]*a[10]-a[6]*a[9]) + a[1]*(a[6]*a[8]-a[4]*a[10]) + a[2]*(a[4]*a[9]-a[5]*a[8]);
         sq_sum = a[0]*a[0] + a[1]*a[1] + a[2]*a[2] + a[4]*a[4] + a[5]*a[5];
-        sq_sum += a[6]*a[6] + a[8]*f[8] + a[9]*f[9] + a[10]*f[10];
+        sq_sum += a[6]*a[6] + a[8]*a[8] + a[9]*a[9] + a[10]*a[10];
         coeff1 = -g*volumes[tet_idx];
         coeff2 = volumes[tet_idx] * (g*(1 + excess_osm) / det - kt_o_omega * (log((det - 1) / det) + (det+chi)/(det*det)));
 
@@ -706,7 +708,7 @@ double calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vec
 
     energy = 0;
 
-    ref_coord[3] = 1.
+    ref_coord[3] = 1.;
     for(i = 12; i < 16; i++) x[i] = 1.;
 
     for(int tet_idx = 0; tet_idx < tetrahedra.size()/4; tet_idx ++){
@@ -739,7 +741,7 @@ double calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vec
         //Find the gel elastic energy of the present mesh cell
         det = a[0]*(a[5]*a[10]-a[6]*a[9]) + a[1]*(a[6]*a[8]-a[4]*a[10]) + a[2]*(a[4]*a[9]-a[5]*a[8]);
         sq_sum = a[0]*a[0] + a[1]*a[1] + a[2]*a[2] + a[4]*a[4] + a[5]*a[5];
-        sq_sum += a[6]*a[6] + a[8]*f[8] + a[9]*f[9] + a[10]*f[10];
+        sq_sum += a[6]*a[6] + a[8]*a[8] + a[9]*a[9] + a[10]*a[10];
 
         energy += volumes[tet_idx] * g * .5 * (sq_sum - 3 - 2*(1 + excess_osm)*log(det));
         energy += volumes[tet_idx] * kt_o_omega * ((det - 1)*log((det - 1) / det) + chi*(det - 1)/det);
@@ -823,25 +825,25 @@ void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vec
 
     //Determinant, trace of the deformation gradient tensor multiplied by its
     //transpose, and energy
-    double det, sq_sum, energy;
+    double det, sq_sum;
     int idx1, idx2, idx3, idx4, i;
 
     vector<double> inv_mat;
 
     energy = 0;
 
-    ref_coord[3] = 1.
+    ref_coord[3] = 1.;
     for(i = 12; i < 16; i++) x[i] = 1.;
 
     //Integer indices of the vertices of the tetrahedron
-    idx1 = tetrahedra[tet_idx*4];
-    idx2 = tetrahedra[tet_idx*4+1];
-    idx3 = tetrahedra[tet_idx*4+2];
-    idx4 = tetrahedra[tet_idx*4+3];
+    idx1 = tetrahedra[tet_index*4];
+    idx2 = tetrahedra[tet_index*4+1];
+    idx3 = tetrahedra[tet_index*4+2];
+    idx4 = tetrahedra[tet_index*4+3];
 
     //Compute the matrix for computing an affine transformation for the
     //current tetrahedral cell
-    inv_mat.assign(inv_mats.begin()+16*tet_idx, inv_mats.begin()+16*(tet_idx+1));
+    inv_mat.assign(inv_mats.begin()+16*tet_index, inv_mats.begin()+16*(tet_index+1));
 
     for(i = 0; i < 3; i++){
         x[i*4] = pts[idx1*3+i];
@@ -852,7 +854,7 @@ void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vec
 
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, 4, 4, 4, 1., x, 4, &inv_mat[0], 4, 0, a, 4);
         
-    for(i = vertex_ranges[tet_idx]; i < vertex_ranges[tet_idx+1]; i++){
+    for(i = vertex_ranges[tet_index]; i < vertex_ranges[tet_index+1]; i++){
         cblas_dcopy(3, &ref_pts[3*contained_vertices[i]], 1, ref_coord, 1);
         cblas_dgemv(CblasRowMajor, CblasNoTrans, 4, 4, 1., a, 4, ref_coord, 1, 0, disp_coord, 1);
         cblas_dcopy(3, &ref_coord[0], 1, &pts[3*contained_vertices[i]], 1);
@@ -861,10 +863,10 @@ void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vec
     //Find the gel elastic energy of the present mesh cell
     det = a[0]*(a[5]*a[10]-a[6]*a[9]) + a[1]*(a[6]*a[8]-a[4]*a[10]) + a[2]*(a[4]*a[9]-a[5]*a[8]);
     sq_sum = a[0]*a[0] + a[1]*a[1] + a[2]*a[2] + a[4]*a[4] + a[5]*a[5];
-    sq_sum += a[6]*a[6] + a[8]*f[8] + a[9]*f[9] + a[10]*f[10];
+    sq_sum += a[6]*a[6] + a[8]*a[8] + a[9]*a[9] + a[10]*a[10];
 
-    *energy = volumes[tet_idx] * g * .5 * (sq_sum - 3 - 2*(1 + excess_osm)*log(det));
-    *energy += volumes[tet_idx] * kt_o_omega * ((det - 1)*log((det - 1) / det) + chi*(det - 1)/det);
+    *energy = volumes[tet_index] * g * .5 * (sq_sum - 3 - 2*(1 + excess_osm)*log(det));
+    *energy += volumes[tet_index] * kt_o_omega * ((det - 1)*log((det - 1) / det) + chi*(det - 1)/det);
 }
 
 double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi){
@@ -898,14 +900,14 @@ void compute_forces_unified(NetworkMeshData &nmd,  double ks, double kb, double 
         bending_forces(nmd.points, nmd.triples, nmd.angles, kb, forces, 0, nmd.triples.size()/3);
     }
 
-    gel_forces(nmd.points, nmd.tets, nmd.inv_mats, nmd.volumes, gmod, delta, kt_o_omega, chi, forces, 0, nmd.tets.size() / 4);
+    gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, gmod, delta, kt_o_omega, chi, forces, 0, nmd.tetrahedra.size() / 4);
 
-    for(int next_idx : bottom){
+    for(int next_idx : nmd.bottom){
         forces[3*next_idx] = 0;
         forces[3*next_idx+1] = 0;
         forces[3*next_idx+2] = 0;
     }
-    for(int next_idx : top){
+    for(int next_idx : nmd.top){
         forces[3*next_idx] = 0;
         forces[3*next_idx+1] = 0;
         forces[3*next_idx+2] = 0;
@@ -921,7 +923,7 @@ void compute_forces_disjoint(NetworkMeshData &nmd,  double ks, double kb, double
     cblas_dscal(forces.size(), 0, &forces[0], 1);
     double unity[2] = {1, 0};
 
-    gel_forces_disjoint(nmd.points, nmd.tets, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, gmod, delta, kt_o_omega, chi, forces, 0, nmd.tets.size() / 4);
+    gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, gmod, delta, kt_o_omega, chi, forces, 0, nmd.tetrahedra.size() / 4);
 
     if(ks > 0){
         stretching_forces(nmd.points, nmd.edges, nmd.lengths, ks, forces, 0, nmd.edges.size()/2);
@@ -932,30 +934,30 @@ void compute_forces_disjoint(NetworkMeshData &nmd,  double ks, double kb, double
     }
 
     //Project network forces onto the forces on the appropriate mesh vertices
-    net_forces = *cholmod_l_zeros(3*nmd.num_net_verts, 1, CHOLMOD_REAL, &(nmd.common));
-    net_contribution = *cholmod_l_zeros(nmd.points.size() - 3*nmd.num_net_verts, 1, CHOLMOD_REAL, &(nmd.common));
+    net_forces = cholmod_l_zeros(3*nmd.num_net_verts, 1, CHOLMOD_REAL, &(nmd.common));
+    net_contribution = cholmod_l_zeros(nmd.points.size() - 3*nmd.num_net_verts, 1, CHOLMOD_REAL, &(nmd.common));
     net_force_values = net_forces->x;
     cblas_dcopy(3*nmd.num_net_verts, &forces[0], 1, (double *) net_force_values, 1);
-    cholmod_l_sdmult(nmd.force_map, 0, unity, unity, net_forces, &(nmd.common));
-    gel_force_values = net_contribtion->x;
+    cholmod_l_sdmult(nmd.force_mapping, 0, unity, unity, net_forces, net_contribution, &(nmd.common));
+    gel_force_values = net_contribution->x;
     cblas_daxpy(nmd.points.size()-3*nmd.num_net_verts, 1., (double *) gel_force_values, 1, &forces[3*nmd.num_net_verts], 1);
 
     cholmod_l_free_dense(&net_forces, &(nmd.common));
     cholmod_l_free_dense(&net_contribution, &(nmd.common));
 
-    for(int next_idx : bottom){
+    for(int next_idx : nmd.bottom){
         forces[3*next_idx] = 0;
         forces[3*next_idx+1] = 0;
         forces[3*next_idx+2] = 0;
     }
-    for(int next_idx : top){
+    for(int next_idx : nmd.top){
         forces[3*next_idx] = 0;
         forces[3*next_idx+1] = 0;
         forces[3*next_idx+2] = 0;
     }
 }
 
-//Helper function to handle parallel force computation
+//Helper functions to handle parallel force computation
 void compute_forces_unified_parallel(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double kt_o_omega, double chi, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
 
     int iter, num_dof;
@@ -987,10 +989,10 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, double ks, double kb,
         g.wait();
     }
 
-    if(tets.size()){
+    if(nmd.tetrahedra.size()){
         for(iter = 0; iter < gel_assignments.size() - 1; iter++){
             g.run([nmd, gmod, delta, kt_o_omega, chi, &force_sets, gel_assignments, iter]{
-                gel_forces(nmd.points, nmd.tets, nmd.inv_mats, nmd.volumes, gmod, delta, kt_o_omega, chi, force_sets[iter], gel_assignments[iter], gel_assignments[iter+1]);
+                gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, gmod, delta, kt_o_omega, chi, force_sets[iter], gel_assignments[iter], gel_assignments[iter+1]);
             });
         }
         g.wait();
@@ -1000,12 +1002,72 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, double ks, double kb,
         cblas_daxpy(num_dof, 1., &force_sets[iter][0], 1, &forces[0], 1);
     }
 
-    for(int next_idx : bottom){
+    for(int next_idx : nmd.bottom){
         forces[3*next_idx] = 0;
         forces[3*next_idx+1] = 0;
         forces[3*next_idx+2] = 0;
     }
-    for(int next_idx : top){
+    for(int next_idx : nmd.top){
+        forces[3*next_idx] = 0;
+        forces[3*next_idx+1] = 0;
+        forces[3*next_idx+2] = 0;
+    }
+}
+
+void compute_forces_disjoint_parallel(NetworkMeshData &nmd,  double ks, double kb, double gmod, double delta, double kt_o_omega, double chi, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
+
+    int iter, num_dof;
+    cholmod_dense *net_forces, *net_contribution;
+    void *net_force_values, *gel_force_values;
+    cblas_dscal(forces.size(), 0, &forces[0], 1);
+    double unity[2] = {1, 0};
+    tbb::task_group g;
+
+    num_dof = forces.size();
+
+    cblas_dscal(num_dof, 0, &forces[0], 1);
+    for(iter = 0; iter < force_sets.size(); iter++){
+        cblas_dscal(num_dof, 0, &force_sets[iter][0], 1);
+    }
+
+    gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, gmod, delta, kt_o_omega, chi, forces, 0, nmd.tetrahedra.size() / 4);
+
+    if(ks > 0){
+        for(iter = 0; iter < stretch_assignments.size() - 1; iter++){
+            g.run([nmd, ks, &force_sets, stretch_assignments, iter]{
+                stretching_forces(nmd.points, nmd.edges, nmd.lengths, ks, force_sets[iter], stretch_assignments[iter], stretch_assignments[iter+1]);
+            });
+        }
+        g.wait();
+    }
+
+    if(kb > 0){
+        for(iter = 0; iter < bend_assignments.size() - 1; iter++){
+            g.run([nmd, kb, &force_sets, bend_assignments, iter]{
+                bending_forces(nmd.points, nmd.triples, nmd.angles, kb, force_sets[iter], bend_assignments[iter], bend_assignments[iter+1]);
+            });
+        }
+        g.wait();
+    }
+
+    //Project network forces onto the forces on the appropriate mesh vertices
+    net_forces = cholmod_l_zeros(3*nmd.num_net_verts, 1, CHOLMOD_REAL, &(nmd.common));
+    net_contribution = cholmod_l_zeros(nmd.points.size() - 3*nmd.num_net_verts, 1, CHOLMOD_REAL, &(nmd.common));
+    net_force_values = net_forces->x;
+    cblas_dcopy(3*nmd.num_net_verts, &forces[0], 1, (double *) net_force_values, 1);
+    cholmod_l_sdmult(nmd.force_mapping, 0, unity, unity, net_forces, net_contribution, &(nmd.common));
+    gel_force_values = net_contribution->x;
+    cblas_daxpy(nmd.points.size()-3*nmd.num_net_verts, 1., (double *) gel_force_values, 1, &forces[3*nmd.num_net_verts], 1);
+
+    cholmod_l_free_dense(&net_forces, &(nmd.common));
+    cholmod_l_free_dense(&net_contribution, &(nmd.common));
+
+    for(int next_idx : nmd.bottom){
+        forces[3*next_idx] = 0;
+        forces[3*next_idx+1] = 0;
+        forces[3*next_idx+2] = 0;
+    }
+    for(int next_idx : nmd.top){
         forces[3*next_idx] = 0;
         forces[3*next_idx+1] = 0;
         forces[3*next_idx+2] = 0;
@@ -1034,12 +1096,12 @@ bool parse_nmc_file(string file_name, NetworkMeshData &nmd){
 
     //Find the extremes along each direction and identify top and bottom points
     for(iter = 0; iter < nmd.points.size(); iter += 3){
-        if(points[iter] < minx) minx = points[iter];
-        if(points[iter+1] < miny) miny = points[iter+1];
-        if(points[iter+2] < minz) minz = points[iter+2];
-        if(points[iter] > maxx) maxx = points[iter];
-        if(points[iter+1] > maxy) maxy = points[iter+1];
-        if(points[iter+2] > maxz) maxz = points[iter+2];
+        if(nmd.points[iter] < minx) minx = nmd.points[iter];
+        if(nmd.points[iter+1] < miny) miny = nmd.points[iter+1];
+        if(nmd.points[iter+2] < minz) minz = nmd.points[iter+2];
+        if(nmd.points[iter] > maxx) maxx = nmd.points[iter];
+        if(nmd.points[iter+1] > maxy) maxy = nmd.points[iter+1];
+        if(nmd.points[iter+2] > maxz) maxz = nmd.points[iter+2];
     }
 
     nmd.bounds.push_back(minx);
@@ -1049,17 +1111,17 @@ bool parse_nmc_file(string file_name, NetworkMeshData &nmd){
     nmd.bounds.push_back(minz);
     nmd.bounds.push_back(maxz);
 
-    for(iter = 2; iter < points.size(); iter += 3){
-        if(abs(points[iter] - minz) < TOL) nmd.bottom.insert(iter / 3);
-        if(abs(points[iter] - maxz) < TOL) nmd.top.insert(iter / 3);
+    for(iter = 2; iter < nmd.points.size(); iter += 3){
+        if(abs(nmd.points[iter] - minz) < TOL) nmd.bottom.insert(iter / 3);
+        if(abs(nmd.points[iter] - maxz) < TOL) nmd.top.insert(iter / 3);
     }
 
     //Find resting edge lengths
-    for(iter = 0; iter < edges.size(); iter += 2){
-        idx1 = edges[iter];
-        idx2 = edges[iter+1];
-        Vec3D p1(points[3*idx1], points[3*idx1+1], points[3*idx1+2]);
-        Vec3D p2(points[3*idx2], points[3*idx2+1], points[3*idx2+2]);
+    for(iter = 0; iter < nmd.edges.size(); iter += 2){
+        idx1 = nmd.edges[iter];
+        idx2 = nmd.edges[iter+1];
+        Vec3D p1(nmd.points[3*idx1], nmd.points[3*idx1+1],nmd.points[3*idx1+2]);
+        Vec3D p2(nmd.points[3*idx2], nmd.points[3*idx2+1],nmd.points[3*idx2+2]);
         nmd.lengths.push_back(distance(p1, p2));
     }
 
@@ -1107,10 +1169,10 @@ bool compute_network_mesh_map(NetworkMeshData &nmd){
     cols = nmd.num_net_verts*3;
     rows = nmd.points.size() - cols;
     nzmax = 12*nmd.num_net_verts;
-    triplet_map = cholmod_l_allocate(rows, cols, nzmax, 0, CHOLMOD_REAL, &(nmd.common));
-    if(nmd.common->status < CHOLMOD_OK){
+    triplet_map = cholmod_l_allocate_triplet(rows, cols, nzmax, 0, CHOLMOD_REAL, &(nmd.common));
+    if(nmd.common.status < CHOLMOD_OK){
         cerr << "The triplet force map representation could not be allocated.\n";
-        cholmod_l_free_triplet(&cond_mat_triplet, &(common));
+        cholmod_l_free_triplet(&triplet_map, &(nmd.common));
         return false;
     }
 
@@ -1120,15 +1182,15 @@ bool compute_network_mesh_map(NetworkMeshData &nmd){
     itype = triplet_map->itype;
 
     //The fourth element of the augmented coordinate is always 1
-    augmented_coord[3] = 1.;
+    aug_coord[3] = 1.;
 
     //For each network vertex within a given mesh element, compute the maping
     //from the network vertex's force to the forces on the element vertices
     for(tet_iter = 0; tet_iter < nmd.tetrahedra.size() / 4; tet_iter ++){
         inv_mat.assign(nmd.inv_mats.begin()+16*tet_iter, nmd.inv_mats.begin()+16*(tet_iter+1));
 
-        for(net_pt_iter = vertex_ranges[tet_iter]; net_pt_iter != vertex_ranges[tet_iter+1]; net_pt_iter++){
-            net_pt_idx = contained_vertices[net_pt_iter];
+        for(net_pt_iter = nmd.vertex_ranges[tet_iter]; net_pt_iter != nmd.vertex_ranges[tet_iter+1]; net_pt_iter++){
+            net_pt_idx = nmd.contained_vertices[net_pt_iter];
             aug_coord[0] = nmd.points[net_pt_idx*3];
             aug_coord[1] = nmd.points[net_pt_idx*3+1];
             aug_coord[2] = nmd.points[net_pt_idx*3+2];
@@ -1152,7 +1214,7 @@ bool compute_network_mesh_map(NetworkMeshData &nmd){
 
     //Convert the triple representation to a CSC representation
     nmd.force_mapping = cholmod_l_triplet_to_sparse(triplet_map, nzmax, &(nmd.common));
-    cholmod_l_free(&triplet_map, &(nmd.common));
+    cholmod_l_free_triplet(&triplet_map, &(nmd.common));
 
     return true;
 }
