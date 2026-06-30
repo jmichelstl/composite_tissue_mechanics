@@ -138,6 +138,8 @@ class RandomNMCBase : public NetworkMeshComplex {
 
         void tetrahedralize();
 
+        void random_dilute(double p);
+
         vector<int> get_tet_ranges(){
             return point_in_tet_ranges;
         }

@@ -354,20 +354,18 @@ vector<double> compute_hyperuniform_packing(Bounds3D bounds, double density, dou
     //to a minimum separation between points
     cutoff = pow(DENSITY_TO_LENGTH / density, 1./3.);
 
-    std::cout << "Target density: " << density << std::endl;
-    std::cout << "Cutoff length: " << cutoff << std::endl;
+    /*std::cout << "Target density: " << density << std::endl;
+    std::cout << "Cutoff length: " << cutoff << std::endl;*/
 
     //Obtain the original Poisson packing
     coordinates = poisson_sphere_packing(bounds, cutoff);
 
-    std::cout << "Number of points here: " << coordinates.size()/3 << std::endl;    
+    //std::cout << "Number of points here: " << coordinates.size()/3 << std::endl;    
 
     noises.assign(coordinates.size() / 3, 0);
 
     //Find the original Voronoi tessellation and the accompanying Lloyd noise
     compute_cell_data(coordinates, bounds, nx, ny, nz, centroids, vertex_sets, face_sets);
-
-    std::cout << "Checkpoint 1.\n";
 
     //Compute noises and sum them in parallel
     tbb::parallel_for( tbb::blocked_range<size_t>(0, noises.size()),
@@ -378,18 +376,12 @@ vector<double> compute_hyperuniform_packing(Bounds3D bounds, double density, dou
         }
     );
 
-    std::cout << "Checkpoint 2.\n";
-
     begin = &noises[0];
     prev_noise = sum_reduce(begin, begin+noises.size(), 0.);
-
-    std::cout << "Checkpoint 3.\n";
 
     //Perform Lloyd moves until either the convergence tolerance is satisfied
     //or the iteration limit is reached.
     do {
-
-       //std::cout << "Iteration start.\n";
 
         //Perform a  Lloyd move, replacing each point by the cenroid of the
         //Voronoi cell it generates.
@@ -421,12 +413,8 @@ vector<double> compute_hyperuniform_packing(Bounds3D bounds, double density, dou
             }
         );
 
-       //std::cout << "Lloyd move carried out.\n";
-
 	   //Compute the new cell data and Lloyd noises
        compute_cell_data(coordinates, bounds, nx, ny, nz, centroids, vertex_sets, face_sets);
-
-       //std::cout << "Cell data computed.\n";
 
         //Compute noises and sum them in parallel
         tbb::parallel_for(tbb::blocked_range<size_t>(0, noises.size()),
@@ -437,14 +425,12 @@ vector<double> compute_hyperuniform_packing(Bounds3D bounds, double density, dou
             }
         );
 
-        //std::cout << "Noises computed.\n";
-
         begin = &noises[0];
         curr_noise = sum_reduce(begin, begin+noises.size(), 0.);
 	    rel_diff = abs((curr_noise - prev_noise) / prev_noise);
 	    prev_noise = curr_noise;
 
-        std::cout << iter << "\t" << curr_noise << "\t " << rel_diff << std::endl;
+        //std::cout << iter << "\t" << curr_noise << "\t " << rel_diff << std::endl;
     } while(rel_diff > conv_tol && ++iter < max_iter);
 
     return coordinates;

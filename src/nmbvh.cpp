@@ -27,25 +27,18 @@ NMTetrahedron::NMTetrahedron(vector<double> coordinates, vector<int> tetrahedra,
 
     double minx, maxx, miny, maxy, minz, maxz;
 
-    minx = FLT_MAX;
-    maxx = -FLT_MAX;
-    miny = FLT_MAX;
-    maxy = -FLT_MAX;
-    minz = FLT_MAX;
-    maxz = -FLT_MAX;
-
     index = my_idx;
-    assign(v0, coordinates, 4*index);
-    assign(d1, coordinates, 4*index+1);
-    assign(d2, coordinates, 4*index+2);
-    assign(d3, coordinates, 4*index+3);
+    assign(v0, coordinates, tetrahedra[4*index]);
+    assign(d1, coordinates, tetrahedra[4*index+1]);
+    assign(d2, coordinates, tetrahedra[4*index+2]);
+    assign(d3, coordinates, tetrahedra[4*index+3]);
 
-    minx = min(d3.x, min(d2.x, min(d1.x, min(v0.x, minx))));
-    maxx = max(d3.x, max(d2.x, max(d1.x, max(v0.x, maxx))));
-    miny = min(d3.y, min(d2.y, min(d1.y, min(v0.y, miny))));
-    maxy = max(d3.y, max(d2.y, max(d1.y, max(v0.y, maxy))));
-    minz = min(d3.z, min(d2.z, min(d1.z, min(v0.z, minz))));
-    maxz = max(d3.z, max(d2.z, max(d1.z, max(v0.z, maxz))));
+    minx = min(d3.x, min(d2.x, min(d1.x, v0.x)));
+    maxx = max(d3.x, max(d2.x, max(d1.x, v0.x)));
+    miny = min(d3.y, min(d2.y, min(d1.y, v0.y)));
+    maxy = max(d3.y, max(d2.y, max(d1.y, v0.y)));
+    minz = min(d3.z, min(d2.z, min(d1.z, v0.z)));
+    maxz = max(d3.z, max(d2.z, max(d1.z, v0.z)));
     bounds = Bounds3D(minx, maxx, miny, maxy, minz, maxz);
 
     difference(d1, v0, d1);
