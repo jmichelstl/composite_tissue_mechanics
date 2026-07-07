@@ -267,7 +267,7 @@ void affine_deform_parallel(vector<double> &points, vector<double> &bounds, Vec3
 int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpar, double &f_rms){
 
     int dim, num_dof, offset, cg_iter, cg_max, ls_iter, ls_max, reset_counter;
-    vector<double> forces, search_dir, prev_forces;
+    vector<double> forces, search_dir, prev_forces, prev_pos;
     double ks, kb, gmod, delta, kt_o_omega, chi, d_curr, d_orig;
     double d_mid, d_prev, ls_coeff, dir_coeff, cg_tol_sqr, sd_mag_sqr;
     double grad_dir_prod, prev_grad_dir_prod;
@@ -277,12 +277,21 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
     void(*force_func)(NetworkMeshData &arg1, double arg2, double arg3, double arg4, double arg5, double arg6, double arg7, vector<double> &arg8);
 
     dim = nmd.points.size();
-    offset = 3*nmd.num_net_verts;
-    num_dof = dim - offset;
+    if(nmd.type == nmc_type::disjoint){
+        offset = 3*nmd.num_net_verts;
+        num_dof = dim - offset;
+    }
+    else {
+        offset = 0;
+        num_dof = dim;
+    }
 
     forces = vector<double>(dim, 0);
     search_dir = vector<double>(num_dof, 0);
-    prev_forces = vector<double>(dim, 0);
+    prev_forces = vector<double>(num_dof, 0);
+    if(nmd.type == nmc_type::disjoint){
+        prev_pos = vector<double>(offset, 0);
+    }
 
     //Unpack mechanical parameters
     ks = mech_params[0];
@@ -328,10 +337,17 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
         //secant line search method.
         cblas_daxpy(num_dof, FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
         //compute_forces(points, top, bottom, edges, lengths, triples, angles, tets, volumes, inv_mats,  ks, kb, gmod, delta, kt_o_omega, chi, forces);
+        if(nmd.type == nmc_type::disjoint){
+            cblas_dcopy(offset, &nmd.points[0], 1, &prev_pos[0], 1);
+        }
         force_func(nmd, ks, kb, gmod, delta, kt_o_omega, chi, forces);
+        if(nmd.type == nmc_type::disjoint){
+            cblas_daxpy(offset, -1., &nmd.points[0], 1, &prev_pos[0], 1);
+            //cout << "Difference norm: " << cblas_dnrm2(offset, &prev_pos[0], 1) << endl;
+        }
         prev_grad_dir_prod = -cblas_ddot(num_dof,&forces[offset],1,&search_dir[0],1);
         cblas_daxpy(num_dof, -FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
-        cblas_dcopy(num_dof, &forces[offset], 1, &prev_forces[0], 1);
+        cblas_dcopy(num_dof, &prev_forces[0], 1, &forces[offset], 1);
         ls_coeff = -FINITE_DIFF_COEFF;
 
         //Carry out a Newton's Method line search
@@ -340,7 +356,9 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
 
 	        //Forces a short distance away along the current search direction
             grad_dir_prod = -cblas_ddot(num_dof,&forces[offset],1,&search_dir[0],1);
+            //printf("GD Prod: %1.10le, Prev GD Prod: %1.10le\n", grad_dir_prod, prev_grad_dir_prod);
             ls_coeff *= grad_dir_prod / (prev_grad_dir_prod - grad_dir_prod);
+            //cout << "Line search coefficient: " << ls_coeff << endl;
             cblas_daxpy(num_dof, ls_coeff, &search_dir[0], 1, &(nmd.points[offset]), 1);
 
             //compute_forces(points, top, bottom, edges, lengths, triples, angles, tets, volumes, inv_mats,  ks, kb, gmod, delta, kt_o_omega, chi, forces);
@@ -436,8 +454,14 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
     double(*energy_func)(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double delta_o_omega, double chi);
 
     dim = nmd.points.size();
-    offset = 3*nmd.num_net_verts;
-    num_dof = nmd.points.size() - offset;
+    if(nmd.type == nmc_type::disjoint){
+        offset = 3*nmd.num_net_verts;
+        num_dof = nmd.points.size() - offset;
+    }
+    else{
+        offset = 0;
+        num_dof = dim;
+    }
 
     //Unpack relaxation parameters and physical parameters
     max_outer = cgtrpar.max_outer;    
@@ -476,9 +500,12 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
 
     prev_cf = energy_func(nmd, ks, kb, gmod, delta, kt_o_omega, chi);
 
+    //cout << "Starting squared force magnitude: " << fmag_sqr_0 << endl;
+    //cout << "Starting cost function: " << prev_cf << endl;
+
     for(n_outer = 0; n_outer < max_outer; ++n_outer){
 
-        cblas_dscal(num_dof, 0, &step[0], 1);
+        for(int i = 0; i < num_dof; i++) step[i] = 0;
         rmag_sqr = cblas_ddot(num_dof, &forces[offset], 1, &forces[offset], 1);
         prev_rmag_sqr = rmag_sqr;
         cblas_dcopy(num_dof, &forces[offset], 1, &search_dir[0], 1);
@@ -496,37 +523,35 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
             force_func(nmd, ks, kb, gmod, delta, kt_o_omega, chi,hess_dir_proj);
             cblas_daxpy(num_dof, -1., &forces[offset], 1, &hess_dir_proj[offset], 1);
             cblas_dscal(num_dof, -1./FINITE_DIFF_COEFF, &hess_dir_proj[offset], 1);
-            sd_hess_norm = cblas_ddot(num_dof, &search_dir[0], 1, &hess_dir_proj[offset], 1); 
+            sd_hess_norm = cblas_ddot(num_dof, &search_dir[0], 1, &hess_dir_proj[offset], 1);
+            //cout << "Search dir Hessian norm: " << sd_hess_norm << endl;
             cblas_daxpy(num_dof, -FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
 
             //If the curvature along the search direction is zero or positive,
             //proceed out to the trust region boundary.
             if(sd_hess_norm <= 0){
                 a = cblas_ddot(num_dof, &search_dir[0], 1, &search_dir[0], 1);
-                b = cblas_ddot(num_dof, &search_dir[0], 1, &step[0], 1);
+                b = 2*cblas_ddot(num_dof, &search_dir[0], 1, &step[0], 1);
                 c = cblas_ddot(num_dof,&step[0],1,&step[0],1) - radius*radius;
-                root_1 = (sqrt(b*b + a*c) - b) / a;
-                root_2 = -2.*b - 2.*root_1;
+                root_1 = (sqrt(b*b - 4*a*c) - b) / a / 2.;
+                root_2 = -b/a - root_1;
 
                 //Evaluate the model for both steps, and choose the root that
                 //minimizes the local quadratic approximation.
                 mod_val_1 = -root_1*cblas_ddot(num_dof, &forces[offset], 1, &search_dir[0], 1);
-                mod_val_1 -= 2.*root_1*cblas_ddot(num_dof, &step[0], 1, &hess_dir_proj[offset], 1);
+                mod_val_1 += root_1*cblas_ddot(num_dof, &step[0], 1, &hess_dir_proj[offset], 1);
                 mod_val_1 += .5*root_1*root_1*sd_hess_norm;
 
                 mod_val_2 = -root_2*cblas_ddot(num_dof, &forces[offset], 1, &search_dir[0], 1);
-                mod_val_2 -= 2.*root_2*cblas_ddot(num_dof, &step[0], 1, &hess_dir_proj[offset], 1);
+                mod_val_2 += root_2*cblas_ddot(num_dof, &step[0], 1, &hess_dir_proj[offset], 1);
                 mod_val_2 += .5*root_2*root_2*sd_hess_norm;
 
                 if(mod_val_1 < mod_val_2){
                     cblas_daxpy(num_dof, root_1, &search_dir[0], 1, &step[0], 1);
-                    mod_val = mod_val_1 + prev_mod_val;
                 }
                 else{
                     cblas_daxpy(num_dof, root_2, &search_dir[0], 1, &step[0], 1);
-                    mod_val = mod_val_2 + prev_mod_val;
                 }
-                cblas_daxpy(num_dof, 1, &step[0], 1, &(nmd.points[offset]), 1);
                 break;
             }
 
@@ -535,13 +560,15 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
             //at the boundary.
             ls_coeff = rmag_sqr / sd_hess_norm;
             cblas_daxpy(num_dof, ls_coeff, &search_dir[0], 1, &step[0], 1);
+            //cout << "Line search coefficient: " << ls_coeff << endl;
 
             if(cblas_ddot(num_dof, &step[0], 1, &step[0], 1) > radius*radius){
+                cblas_daxpy(num_dof, -ls_coeff, &search_dir[0], 1, &step[0], 1);
                 a = cblas_ddot(num_dof, &search_dir[0], 1, &search_dir[0], 1);
-                b = cblas_ddot(num_dof, &search_dir[0], 1, &step[0], 1);
+                b = 2*cblas_ddot(num_dof, &search_dir[0], 1, &step[0], 1);
                 c = cblas_ddot(num_dof,&step[0],1,&step[0],1) - radius*radius;
-                root_1 = (sqrt(b*b + a*c) - b) / a;
-                cblas_daxpy(num_dof, root_1-ls_coeff, &step[0], 1, &step[0], 1);
+                root_1 = (sqrt(b*b - 4*a*c) - b) / a / 2.;
+                cblas_daxpy(num_dof, root_1, &search_dir[0], 1, &step[0], 1);
                 break;
             }
 
@@ -565,6 +592,11 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
             n_inner ++;
         } while(n_inner < max_inner);
 
+        mod_val = prev_cf;
+        mod_val -= cblas_ddot(num_dof, &step[0], 1, &forces[offset], 1);
+        mod_val += .5*cblas_ddot(num_dof, &step[0], 1, &hess_dir_proj[offset], 1);
+        //printf("Step magnitude: %1.10le\n", cblas_dnrm2(num_dof, &step[0], 1));
+
         //Evaluate the energy after a step is proposed, and compare the actual
         //and expected reduction. Modify the trust radius as appropriate, and
         //decide whether to keep the search step.
@@ -572,6 +604,10 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
 
         curr_cf = energy_func(nmd, ks, kb, gmod, delta, kt_o_omega, chi);
         cf_model_ratio = (prev_cf - curr_cf) / (prev_cf - mod_val); 
+
+        //cout << "Prev: " << prev_cf << ", Current: " << curr_cf << ", Model: " << mod_val << endl;
+
+        //cout << "CF model ratio: " << cf_model_ratio << endl;
 
         //Address poor performance of the model by shrinking the trust radius
         if(cf_model_ratio < .25){
@@ -596,6 +632,8 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
 
         prev_cf = curr_cf;
         fmag_sqr = cblas_ddot(num_dof, &forces[offset], 1, &forces[offset], 1);
+        //cout << "Updated squared force magnitude: " << fmag_sqr << endl;
+        //cout << "Updated energy: " << curr_cf << endl;
         if(fmag_sqr / fmag_sqr_0 < conv_tol_sqr) break;
     }
 
@@ -843,7 +881,7 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
 
     for(n_outer = 0; n_outer < max_outer; ++n_outer){
 
-        cblas_dscal(num_dof, 0, &step[0], 1);
+        for(int i = 0; i < num_dof; i++) step[i] = 0;
         rmag_sqr = cblas_ddot(num_dof, &forces[offset], 1, &forces[offset], 1);
         prev_rmag_sqr = rmag_sqr;
         cblas_dcopy(num_dof, &forces[offset], 1, &search_dir[0], 1);
@@ -867,30 +905,27 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
             //proceed out to the trust region boundary.
             if(sd_hess_norm <= 0){
                 a = cblas_ddot(num_dof, &search_dir[0], 1, &search_dir[0], 1);
-                b = cblas_ddot(num_dof, &search_dir[0], 1, &step[0], 1);
+                b = 2*cblas_ddot(num_dof, &search_dir[0], 1, &step[0], 1);
                 c = cblas_ddot(num_dof,&step[0],1,&step[0],1) - radius*radius;
-                root_1 = (sqrt(b*b + a*c) - b) / a;
-                root_2 = -2.*b - 2.*root_1;
+                root_1 = (sqrt(b*b - 4*a*c) - b) / a / 2.;
+                root_2 = -b / a - root_1;
 
                 //Evaluate the model for both steps, and choose the root that
                 //minimizes the local quadratic approximation.
                 mod_val_1 = -root_1*cblas_ddot(num_dof, &forces[offset], 1, &search_dir[0], 1);
-                mod_val_1 -= 2.*root_1*cblas_ddot(num_dof, &step[0], 1, &hess_dir_proj[offset], 1);
+                mod_val_1 += root_1*cblas_ddot(num_dof, &step[0], 1, &hess_dir_proj[offset], 1);
                 mod_val_1 += .5*root_1*root_1*sd_hess_norm;
 
                 mod_val_2 = -root_2*cblas_ddot(num_dof, &forces[0], 1, &search_dir[0], 1);
-                mod_val_2 -= 2.*root_2*cblas_ddot(num_dof, &step[0], 1, &hess_dir_proj[0], 1);
+                mod_val_2 += root_2*cblas_ddot(num_dof, &step[0], 1, &hess_dir_proj[0], 1);
                 mod_val_2 += .5*root_2*root_2*sd_hess_norm;
 
                 if(mod_val_1 < mod_val_2){
                     cblas_daxpy(num_dof, root_1, &search_dir[0], 1, &step[0], 1);
-                    mod_val = mod_val_1 + prev_mod_val;
                 }
                 else{
                     cblas_daxpy(num_dof, root_2, &search_dir[0], 1, &step[0], 1);
-                    mod_val = mod_val_2 + prev_mod_val;
                 }
-                cblas_daxpy(num_dof, 1, &step[0], 1, &(nmd.points[offset]), 1);
                 break;
             }
 
@@ -901,11 +936,12 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
             cblas_daxpy(num_dof, ls_coeff, &search_dir[0], 1, &step[0], 1);
 
             if(cblas_ddot(num_dof, &step[0], 1, &step[0], 1) > radius*radius){
+                cblas_daxpy(num_dof, -ls_coeff, &search_dir[0], 1, &step[0], 1);
                 a = cblas_ddot(num_dof, &search_dir[0], 1, &search_dir[0], 1);
-                b = cblas_ddot(num_dof, &search_dir[0], 1, &step[0], 1);
+                b = 2*cblas_ddot(num_dof, &search_dir[0], 1, &step[0], 1);
                 c = cblas_ddot(num_dof,&step[0],1,&step[0],1) - radius*radius;
-                root_1 = (sqrt(b*b + a*c) - b) / a;
-                cblas_daxpy(num_dof, root_1-ls_coeff, &step[0], 1, &step[0], 1);
+                root_1 = (sqrt(b*b - 4*a*c) - b) / a;
+                cblas_daxpy(num_dof, root_1, &search_dir[0], 1, &step[0], 1);
                 break;
             }
 
@@ -927,6 +963,10 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
             cblas_daxpy(num_dof, 1., &forces[offset], 1, &search_dir[0], 1); 
             cblas_daxpy(num_dof, -1., &hess_dir_proj[offset], 1, &search_dir[0], 1); 
         }
+
+        mod_val = prev_cf;
+        mod_val -= cblas_ddot(num_dof, &step[0], 1, &forces[offset], 1);
+        mod_val += .5*cblas_ddot(num_dof,&step[0],1,&hess_dir_proj[offset],1);
 
         //Evaluate the energy after a step is proposed, and compare the actual
         //and expected reduction. Modify the trust radius as appropriate, and
@@ -1065,7 +1105,9 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     calc_volumes(nmd);
 
     //Make a record of the reference positions of network vertices
-    nmd.reference_points.assign(nmd.points.begin(), nmd.points.begin()+3*nmd.num_net_verts);
+    if(type == nmc_type::disjoint){
+        nmd.reference_points.assign(nmd.points.begin(), nmd.points.begin()+3*nmd.num_net_verts);
+    }
 
     //Find matrices for computing local affine transformations
     get_inv_mats(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.type);
@@ -1081,7 +1123,12 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     total_displacement = Vec3D(0, 0, 0);
     estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
     cout << "Stretching energy after dilation: " << estretch << endl;
-    egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+    if(type == nmc_type::unified){
+        egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+    }
+    else{
+        egel = calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+    }
     cout << "Gel energy: " << egel << endl;
 
     /*minx = FLT_MAX;
@@ -1115,12 +1162,22 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     if(! parallel){
         estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
 	    ebend = fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-        egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        if(nmd.type == nmc_type::unified){
+            egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        }
+        else {
+            egel = calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        }
     }
     else{
         estretch = parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
 	    ebend = parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-	    egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        if(nmd.type == nmc_type::unified){
+            egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        }
+        else {
+            egel = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        }
     }
     report_edata(edat_file, total_displacement, estretch, ebend, egel);
     log_entry(log_file, f_rms, n_steps, ct);
@@ -1226,12 +1283,22 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
                     if(! parallel){
                         estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
                         ebend = fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                        egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                        if(nmd.type == nmc_type::unified){
+                            egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                        }
+                        else {
+                            egel = calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                        }
                     }
                     else{
                         estretch = parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
                         ebend = parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                        egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                        if(nmd.type == nmc_type::unified){
+                            egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                        }
+                        else {
+                            egel = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                        }
                     }
                     report_edata(edat_file, total_displacement, estretch, ebend, egel);
                     log_entry(log_file, f_rms, n_steps, ct);
@@ -1271,12 +1338,22 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
                 if(! parallel){
                     estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
                     ebend = fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                    egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                    if(nmd.type == nmc_type::unified){
+                        egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                    }
+                    else {
+                        egel = calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                    }
                 }
                 else{
                     estretch = parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
                     ebend = parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                    egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                    if(nmd.type == nmc_type::unified){
+                        egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                    }
+                    else {
+                        egel = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+                    }
                 }
                 report_edata(edat_file, total_displacement, estretch, ebend, egel);
                 log_entry(log_file, f_rms, n_steps, ct);
@@ -1460,12 +1537,14 @@ int main(int argc, char **argv){
             //Use absolute, rather than relative, displacements
             case 'a':
                 strain_mode = false;
+                break;
             case 'b':
                 batch_file = string(optarg);
                 break;
             case 'd':
                 type = nmc_type::disjoint;
                 extension = "dnmc";
+                break;
             case 't':
 		        num_read = sscanf(optarg, "%d", &n_threads);
                 if(! num_read || n_threads <= 0){

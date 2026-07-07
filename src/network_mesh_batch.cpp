@@ -16,6 +16,8 @@
 
 using namespace std;
 
+extern "C" void exactinit();
+
 //Types to handle different classes of network construction protocol
 
 //Different types of random networks
@@ -528,7 +530,6 @@ void off_lattice_batch(NMCJob job, bool use_verbose, int real_dec_digits){
 
                 if(job.max_vol > 0){
                     rpnmc->tetrahedralize();
-                
                     report_disjoint_network_mesh_complex((char *) output_name.c_str(), rpnmc);
                 }
                 else{
@@ -569,6 +570,7 @@ int main(int argc, char **argv){
     }
 
     else{
+        exactinit();
         off_lattice_batch(job, use_verbose, real_dec_digits);
     }
 

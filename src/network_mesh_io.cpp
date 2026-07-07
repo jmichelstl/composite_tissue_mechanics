@@ -488,7 +488,6 @@ bool report_network_mesh_complex(char *file_name, shared_ptr<NetworkMeshComplex>
     return true;
 }
 
-//TODO: Finish modifying this function to account for differences in data structures
 bool report_disjoint_network_mesh_complex(char *file_name, shared_ptr<RandomNMCBase> rnmc){
 
     FILE *output;

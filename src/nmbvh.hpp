@@ -58,7 +58,8 @@ class NMTetrahedron : public NMPolyhedron {
         bool contains(Vec3D pt);
 
     private:
-        Vec3D v0, d1, d2, d3;
+        double vertices[12];
+        int faces[12];
 };
 
 

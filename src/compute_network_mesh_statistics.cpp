@@ -259,7 +259,7 @@ int main(int argc, char **argv){
     }
 
     if(disjoint){
-        if(extract_disjoint_network_mesh_complex((char *)input_name.c_str(), coordinates, num_net_verts, edges, triples, angles, tets, vr, cv)){
+        if(! extract_disjoint_network_mesh_complex((char *)input_name.c_str(), coordinates, num_net_verts, edges, triples, angles, tets, vr, cv)){
             cerr << "The specified DNMC file could not be parsed.\n";
             return 3;
         }

@@ -1,6 +1,9 @@
 #include "nmbvh.hpp"
 
 #define min(a, b) a < b ? a : b
+#define max(a, b) a > b ? a : b
+
+extern "C" double orient3d(double *pa, double *pb, double *pc, double *pd);
 
 //Find a union between two bounding boxes
 Bounds3D box_union(Bounds3D box1, Bounds3D box2){
@@ -17,50 +20,109 @@ Bounds3D box_union(Bounds3D box1, Bounds3D box2){
     return Bounds3D(minx, maxx, miny, maxy, minz, maxz);
 }
 
+/*void print_bounds(Bounds3D box){
+
+    cout << "(" << box.min_x() << ", " << box.max_x() << "), ";
+    cout << "(" << box.min_y() << ", " << box.max_y() << "), ";
+    cout << "(" << box.min_z() << ", " << box.max_z() << ")\n";
+}*/
+
 NMPolyhedron::~NMPolyhedron(){}
 
 bool NMPolyhedron::contains(Vec3D pt){
     return false;
 }
 
+void add_face(vector<Vec3D> points, int idx1, int idx2, int idx3, Vec3D centroid, int *faces, int face_idx){
+
+    Vec3D diff1, diff2, cross_prod;
+
+    difference(points[idx2], points[idx1], diff1);
+    difference(points[idx3], points[idx1], diff2);
+    cross(diff1, diff2, cross_prod);
+
+    difference(points[idx1], centroid, diff1);
+    if(dot(diff1, cross_prod) < 0){
+        faces[3*face_idx] = idx3;
+        faces[3*face_idx+2] = idx1;
+    }
+    else {
+        faces[3*face_idx] = idx1;
+        faces[3*face_idx+2] = idx3;
+    }
+    faces[3*face_idx+1] = idx2;
+}
+
 NMTetrahedron::NMTetrahedron(vector<double> coordinates, vector<int> tetrahedra, int my_idx){
 
     double minx, maxx, miny, maxy, minz, maxz;
+    vector<Vec3D> points(4, Vec3D());
+    Vec3D centroid(0, 0, 0);
 
     index = my_idx;
-    assign(v0, coordinates, tetrahedra[4*index]);
-    assign(d1, coordinates, tetrahedra[4*index+1]);
-    assign(d2, coordinates, tetrahedra[4*index+2]);
-    assign(d3, coordinates, tetrahedra[4*index+3]);
+    assign(points[0], coordinates, tetrahedra[4*index]);
+    assign(points[1], coordinates, tetrahedra[4*index+1]);
+    assign(points[2], coordinates, tetrahedra[4*index+2]);
+    assign(points[3], coordinates, tetrahedra[4*index+3]);
 
-    minx = min(d3.x, min(d2.x, min(d1.x, v0.x)));
-    maxx = max(d3.x, max(d2.x, max(d1.x, v0.x)));
-    miny = min(d3.y, min(d2.y, min(d1.y, v0.y)));
-    maxy = max(d3.y, max(d2.y, max(d1.y, v0.y)));
-    minz = min(d3.z, min(d2.z, min(d1.z, v0.z)));
-    maxz = max(d3.z, max(d2.z, max(d1.z, v0.z)));
-    bounds = Bounds3D(minx, maxx, miny, maxy, minz, maxz);
+    minx = fmin(points[3].x, fmin(points[2].x, fmin(points[1].x, points[0].x)));
+    maxx = fmax(points[3].x, fmax(points[2].x, fmax(points[1].x, points[0].x)));
+    miny = fmin(points[3].y, fmin(points[2].y, fmin(points[1].y, points[0].y)));
+    maxy = fmax(points[3].y, fmax(points[2].y, fmax(points[1].y, points[0].y)));
+    minz = fmin(points[3].z, fmin(points[2].z, fmin(points[1].z, points[0].z)));
+    maxz = fmax(points[3].z, fmax(points[2].z, fmax(points[1].z, points[0].z)));
+    bounds = Bounds3D(minx-TOL, maxx+TOL, miny-TOL, maxy+TOL, minz-TOL, maxz+TOL);
 
-    difference(d1, v0, d1);
-    difference(d2, v0, d2);
-    difference(d3, v0, d3);
+    for(int iter = 0; iter < 4; iter ++){
+        vertices[3*iter] = points[iter].x;
+        centroid.x += points[iter].x;
+        vertices[3*iter + 1] = points[iter].y;
+        centroid.y += points[iter].y;
+        vertices[3*iter + 2] = points[iter].z;
+        centroid.z += points[iter].z;
+    }
+    centroid.x /= 4.;
+    centroid.y /= 4.;
+    centroid.z /= 4.;
+
+    /*cout << "Vertices: \n";
+    for(int iter = 0; iter < 4; iter ++){
+        cout << vertices[3*iter] << ", " << vertices[3*iter+1] << ", " << vertices[3*iter+2] << endl;
+    }
+    print_bounds(bounds);*/
+
+    //Make sure each face is properly oriented
+    add_face(points, 0, 1, 2, centroid, faces, 0);
+    add_face(points, 0, 1, 3, centroid, faces, 1);
+    add_face(points, 0, 2, 3, centroid, faces, 2);
+    add_face(points, 1, 2, 3, centroid, faces, 3);
 }
 
 bool NMTetrahedron::contains(Vec3D pt){
 
-    Vec3D diff;
-    double proj_1, proj_2, proj_3;
+    double pd[3];
+    int idx1, idx2, idx3;
 
-    difference(pt, v0, diff);
+    pd[0] = pt.x;
+    pd[1] = pt.y;
+    pd[2] = pt.z;
 
-    proj_1 = dot(diff, d1);
-    if(proj_1 < 0 || proj_1 > 1) return false;
+    /*cout << "Query point: " << pt.x << ", " << pt.y << ", " << pt.z << endl;
+    cout << "Vertices: \n";
+    for(int iter = 0; iter < 4; iter ++){
+        cout << vertices[3*iter] << ", " << vertices[3*iter+1] << ", " << vertices[3*iter+2] << endl;
+    }*/
 
-    proj_2 = dot(diff, d2);
-    if(proj_2 < 0 || proj_2 > 1 - proj_1) return false;
+    for(int iter = 0; iter < 4; iter++){
+        idx1 = faces[3*iter];
+        idx2 = faces[3*iter+1];
+        idx3 = faces[3*iter+2];
+        if(orient3d(vertices+3*idx1, vertices+3*idx2, vertices+3*idx3, pd) < -TOL){
+            return false;
+        }
+    }
 
-    proj_3 = dot(diff, d3);
-    return proj_3 >= 0 && proj_3 <= 1 - proj_1 - proj_2;
+    return true; 
 }
 
 //Node type for building a bounding volume hierarchy
@@ -121,13 +183,9 @@ inline uint32_t left_shift_3(uint32_t x) {
     if (x == (1 << 10)) --x;
 
     x = (x | (x << 16)) & 0b00000011000000000000000011111111;
-    // x = ---- --98 ---- ---- ---- ---- 7654 3210
     x = (x | (x << 8)) & 0b00000011000000001111000000001111;
-    // x = ---- --98 ---- ---- 7654 ---- ---- 3210
     x = (x | (x << 4)) & 0b00000011000011000011000011000011;
-    // x = ---- --98 ---- 76-- --54 ---- 32-- --10
     x = (x | (x << 2)) & 0b00001001001001001001001001001001;
-    // x = ---- 9--8 --7- -6-- 5--4 --3- -2-- 1--0
 
     return x;
 }
@@ -173,13 +231,13 @@ BVHBuildNode * NMBVH::bvh_build(vector<shared_ptr<NMPolyhedron>> &sorted, vector
 
         //If the loop terminates, no split was achieved, and all polyhedra
         //should be placed in a new leaf
-        Bounds3D bounds = polyhedra[m_info[start].poly_idx]->get_bounds();
+        Bounds3D leaf_bounds = polyhedra[m_info[start].poly_idx]->get_bounds();
         sorted.push_back(polyhedra[m_info[start].poly_idx]);
         for(auto iter = next(iter1); iter != iter2; iter ++){
-            bounds = box_union(bounds, polyhedra[(*iter).poly_idx]->get_bounds());
+            leaf_bounds = box_union(leaf_bounds, polyhedra[(*iter).poly_idx]->get_bounds());
             sorted.push_back(polyhedra[(*iter).poly_idx]);
         }
-        node->init_leaf(sorted.size()+start-end, end - start, bounds);
+        node->init_leaf(sorted.size()+start-end, end - start, leaf_bounds);
     }
 
     return node;
@@ -231,6 +289,12 @@ void NMBVH::index_polyhedra() {
         s_nodes.push_back(BVHSearchNode());
     }
     flatten_tree(root, &offset);
+    /*std::cout << "Final bounds: ";
+    Bounds3D outer_bounds = s_nodes[0].bounds;
+    std::cout << "(" << outer_bounds.min_x() << ", " << outer_bounds.max_x() << ") ";
+    std::cout << "(" << outer_bounds.min_y() << ", " << outer_bounds.max_y() << ") ";
+    std::cout << "(" << outer_bounds.min_z() << ", " << outer_bounds.max_z() << ")\n";*/
+
 }
 
 NMBVH::NMBVH(vector<double> coordinates, vector<int> tetrahedra, Bounds3D bounds) : bounds(bounds) {
@@ -246,6 +310,9 @@ NMBVH::NMBVH(vector<double> coordinates, vector<int> tetrahedra, Bounds3D bounds
         }
     );
     polyhedra.assign(nm_tetrahedra.begin(), nm_tetrahedra.end());
+    /*for(int iter = 0; iter < tetrahedra.size() / 4; iter ++){
+        polyhedra.push_back(make_shared<NMTetrahedron>(coordinates, tetrahedra, iter));
+    }*/
 
     index_polyhedra();
 }
@@ -267,9 +334,17 @@ void NMBVH::search_recursive(vector<int> &hits, Vec3D query, int node_idx){
         if(s_nodes[node_idx+1].bounds.in_bounds(query)){
             search_recursive(hits, query, node_idx+1);
         }
+        else{
+            /*cout << "Point " << query.x << ", " << query.y << ", " << query.z << " not in " << "box ";
+            print_bounds(s_nodes[node_idx+1].bounds);*/
+        }
         int offset = s_nodes[node_idx].secondChildOffset;
         if(s_nodes[offset].bounds.in_bounds(query)){
             search_recursive(hits, query, offset);
+        }
+        else{
+            /*cout << "Point " << query.x << ", " << query.y << ", " << query.z << " not in " << "box ";
+            print_bounds(s_nodes[offset].bounds);*/
         }
     }
 }
@@ -277,6 +352,8 @@ void NMBVH::search_recursive(vector<int> &hits, Vec3D query, int node_idx){
 vector<int> NMBVH::containing_polyhedra(Vec3D query){
 
     vector<int> hits;
+
+    //cout << "Query here: " << query.x << ", " << query.y << ", " << query.z << endl;
 
     if(s_nodes.size() == 0) return hits;
 

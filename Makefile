@@ -48,17 +48,21 @@ lib/libnmbvh.a:
 	mkdir -p lib
 	$(gcc) $(ONEAPI_INC) -c -o lib/libnmbvh.a src/nmbvh.cpp $(ONE_API_LINK) -ltbb
 
-nmcbatch: lib/libgeomprim.a lib/libnmc.a lib/libnmio.a lib/librandompointproc.a lib/libnmbvh.a
-	$(gcc) $(ONEAPI_INC) -o nmcbatch src/network_mesh_batch.cpp -ltinyxml2 -L/usr/lib/x86_64-linux-gnu/ -lgmsh -L./lib -lgeomprim -lnmc -lnmio -lnmbvh -lz -lvoro++ -lrandompointproc $(ONEAPI_LINK) -ltbb -ltet
+lib/libpredicates.a:
+	mkdir -p lib
+	gcc -c src/predicates.c -o lib/libpredicates.a
 
-ngrelax: lib/libgeomprim.a lib/libflists.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a lib/libngru.a lib/libnmbvh.a
-	$(gcc) $(ONEAPI_INC) -o ngrelax src/relax_network_gel_composite.cpp -L./lib -lgeomprim -lnmc -lnmio -lflists -lrandompointproc -lngru -lnmbvh -lgmsh -lz $(ONEAPI_LINK) -ltbb $(MKL_LINK) -ltinyxml2 -lboost_filesystem -lboost_regex -lvoro++ -lcholmod -ltet
+nmcbatch: lib/libgeomprim.a lib/libnmc.a lib/libnmio.a lib/librandompointproc.a lib/libnmbvh.a lib/libpredicates.a
+	$(gcc) $(ONEAPI_INC) -o nmcbatch src/network_mesh_batch.cpp -ltinyxml2 -L/usr/lib/x86_64-linux-gnu/ -lgmsh -L./lib -lgeomprim -lnmc -lnmio -lnmbvh -lz -lvoro++ -lrandompointproc $(ONEAPI_LINK) -ltbb -lpredicates
 
-nmtraj_viz: lib/libgeomprim.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a lib/libnmbvh.a
-	$(gcc) $(VTK_INC) -o nmtraj_viz src/visualize_network_mesh.cpp -L./lib -lgeomprim -lnmc -lnmio -lrandompointproc -lnmbvh -lgmsh -lz -lvoro++ $(VTK_LINK) $(ONEAPI_LINK) -ltbb -ltet
+ngrelax: lib/libgeomprim.a lib/libflists.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a lib/libngru.a lib/libnmbvh.a lib/libpredicates.a
+	$(gcc) $(ONEAPI_INC) -o ngrelax src/relax_network_gel_composite.cpp -L./lib -lgeomprim -lnmc -lnmio -lflists -lrandompointproc -lngru -lnmbvh -lgmsh -lz $(ONEAPI_LINK) -ltbb $(MKL_LINK) -ltinyxml2 -lboost_filesystem -lboost_regex -lvoro++ -lcholmod -lpredicates
 
-nmc_stats: lib/libgeomprim.a lib/libnmio.a lib/libnmbvh.a
-	$(gcc) -o nmc_stats src/compute_network_mesh_statistics.cpp -L./lib -lgeomprim -lnmio -lnmbvh -lz -ltinyxml2 $(ONEAPI_LINK) -ltbb
+nmtraj_viz: lib/libgeomprim.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a lib/libnmbvh.a lib/libpredicates.a
+	$(gcc) $(VTK_INC) -o nmtraj_viz src/visualize_network_mesh.cpp -L./lib -lgeomprim -lnmc -lnmio -lrandompointproc -lnmbvh -lgmsh -lz -lvoro++ $(VTK_LINK) $(ONEAPI_LINK) -ltbb -lpredicates
+
+nmc_stats: lib/libgeomprim.a lib/libnmio.a lib/libnmbvh.a lib/libpredicates.a
+	$(gcc) -o nmc_stats src/compute_network_mesh_statistics.cpp -L./lib -lgeomprim -lnmio -lnmbvh -lz -ltinyxml2 $(ONEAPI_LINK) -ltbb -lpredicates
 
 geomclean:
 	rm lib/libgeomprim.a
