@@ -27,6 +27,7 @@
 #include <numeric>
 #include <tbb.h>
 #include "network_gel_relax_utils.hpp"
+#include <time.h>
 
 //Default number of maximum steps for Newton-Raphson root finding
 #define DEFAULT_MAX_STEPS 1000
@@ -234,9 +235,9 @@ void affine_deform(vector<double> &points, vector<double> &bounds, Vec3D disp){
     }
 
     //Update upper coordinate bounds
-    bounds[1] += disp.x * (bounds[5] - bounds[4]);
-    bounds[3] += disp.y * (bounds[5] - bounds[4]);
-    bounds[5] += disp.z * (bounds[5] - bounds[4]);
+    bounds[1] += disp.x;
+    bounds[3] += disp.y;
+    bounds[5] += disp.z;
 }
 
 //Affinely deform a tissue by specifying a displacement along the top while
@@ -257,9 +258,9 @@ void affine_deform_parallel(vector<double> &points, vector<double> &bounds, Vec3
         }
     );
 
-    bounds[1] += disp.x * (bounds[5] - bounds[4]);
-    bounds[3] += disp.y * (bounds[5] - bounds[4]);
-    bounds[5] += disp.z * (bounds[5] - bounds[4]);
+    bounds[1] += disp.x;
+    bounds[3] += disp.y;
+    bounds[5] += disp.z;
 }
 
 //Perform a structural relaxation of a composite tissue in a serial manner.
@@ -267,10 +268,10 @@ void affine_deform_parallel(vector<double> &points, vector<double> &bounds, Vec3
 int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpar, double &f_rms){
 
     int dim, num_dof, offset, cg_iter, cg_max, ls_iter, ls_max, reset_counter;
-    vector<double> forces, search_dir, prev_forces, prev_pos;
+    vector<double> forces, search_dir, prev_forces;//, hess_dir_proj;
     double ks, kb, gmod, delta, kt_o_omega, chi, d_curr, d_orig;
     double d_mid, d_prev, ls_coeff, dir_coeff, cg_tol_sqr, sd_mag_sqr;
-    double grad_dir_prod, prev_grad_dir_prod;
+    double grad_dir_prod, prev_grad_dir_prod;//, sd_hess_norm;
 
     //Method to toggle between unified and disjoint methods for computing
     //forces, without having to use large numbers of conditional evaluations
@@ -289,9 +290,7 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
     forces = vector<double>(dim, 0);
     search_dir = vector<double>(num_dof, 0);
     prev_forces = vector<double>(num_dof, 0);
-    if(nmd.type == nmc_type::disjoint){
-        prev_pos = vector<double>(offset, 0);
-    }
+    //hess_dir_proj = vector<double>(dim, 0);
 
     //Unpack mechanical parameters
     ks = mech_params[0];
@@ -336,28 +335,29 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
         //search direction with the search direction itself to facilitate the
         //secant line search method.
         cblas_daxpy(num_dof, FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
-        //compute_forces(points, top, bottom, edges, lengths, triples, angles, tets, volumes, inv_mats,  ks, kb, gmod, delta, kt_o_omega, chi, forces);
-        if(nmd.type == nmc_type::disjoint){
-            cblas_dcopy(offset, &nmd.points[0], 1, &prev_pos[0], 1);
-        }
         force_func(nmd, ks, kb, gmod, delta, kt_o_omega, chi, forces);
-        if(nmd.type == nmc_type::disjoint){
-            cblas_daxpy(offset, -1., &nmd.points[0], 1, &prev_pos[0], 1);
-            //cout << "Difference norm: " << cblas_dnrm2(offset, &prev_pos[0], 1) << endl;
-        }
         prev_grad_dir_prod = -cblas_ddot(num_dof,&forces[offset],1,&search_dir[0],1);
         cblas_daxpy(num_dof, -FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
         cblas_dcopy(num_dof, &prev_forces[0], 1, &forces[offset], 1);
         ls_coeff = -FINITE_DIFF_COEFF;
 
-        //Carry out a Newton's Method line search
+        //Carry out a secant method line search
 	    ls_iter = 0;
 	    do {
 
 	        //Forces a short distance away along the current search direction
+            /*cblas_daxpy(num_dof, FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
+            force_func(nmd, ks, kb, gmod, delta, kt_o_omega, chi, hess_dir_proj);
+            cblas_daxpy(num_dof, -FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
+            cblas_daxpy(num_dof, -1., &forces[offset], 1, &hess_dir_proj[offset], 1);
+            cblas_dscal(num_dof, -1./FINITE_DIFF_COEFF, &hess_dir_proj[offset], 1);*/
+
             grad_dir_prod = -cblas_ddot(num_dof,&forces[offset],1,&search_dir[0],1);
+            //grad_dir_prod = cblas_ddot(num_dof,&forces[offset],1,&search_dir[0],1);
+            //sd_hess_norm = cblas_ddot(num_dof, &hess_dir_proj[offset], 1, &search_dir[0], 1);
             //printf("GD Prod: %1.10le, Prev GD Prod: %1.10le\n", grad_dir_prod, prev_grad_dir_prod);
             ls_coeff *= grad_dir_prod / (prev_grad_dir_prod - grad_dir_prod);
+            //ls_coeff = grad_dir_prod / sd_hess_norm;
             //cout << "Line search coefficient: " << ls_coeff << endl;
             cblas_daxpy(num_dof, ls_coeff, &search_dir[0], 1, &(nmd.points[offset]), 1);
 
@@ -365,6 +365,8 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
             force_func(nmd, ks, kb, gmod, delta, kt_o_omega, chi, forces);
 	        ls_iter ++;
             prev_grad_dir_prod = grad_dir_prod;
+        //} while(ls_iter < ls_max && sd_mag_sqr*ls_coeff*ls_coeff > cg_tol_sqr);
+            sd_mag_sqr = cblas_ddot(num_dof, &search_dir[0], 1, &search_dir[0], 1);
         } while(ls_iter < ls_max && sd_mag_sqr*ls_coeff*ls_coeff > cg_tol_sqr);
 
         d_prev = d_curr;
@@ -445,7 +447,7 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
     double prev_cf, curr_mod, prev_mod, sd_hess_norm, ls_coeff, fmag_sqr;
     double fmag_sqr_0, ks, kb, gmod, delta, kt_o_omega, chi, dir_coeff, a, b, c;
     double inner_tol_sqr, rmag_sqr, prev_rmag_sqr, mod_val;
-    double prev_mod_val, root_1, root_2, mod_val_1, mod_val_2;
+    double prev_mod_val, root_1, root_2, mod_val_1, mod_val_2, step_mag;
     vector<double> forces, search_dir, hess_dir_proj, step;
 
     //Means of toggling between the unified and disjoint methods for
@@ -595,7 +597,8 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
         mod_val = prev_cf;
         mod_val -= cblas_ddot(num_dof, &step[0], 1, &forces[offset], 1);
         mod_val += .5*cblas_ddot(num_dof, &step[0], 1, &hess_dir_proj[offset], 1);
-        //printf("Step magnitude: %1.10le\n", cblas_dnrm2(num_dof, &step[0], 1));
+        step_mag = cblas_dnrm2(num_dof, &step[0], 1);
+        //printf("Step magnitude: %1.10le\n", step_mag);
 
         //Evaluate the energy after a step is proposed, and compare the actual
         //and expected reduction. Modify the trust radius as appropriate, and
@@ -624,17 +627,19 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
 
         //If the ratio of actual to predicted improvement is inadequate, reject
         //the computed update step.
-        if(cf_model_ratio < min_ratio){
-            //compute_forces(points, top, bottom, edges, lengths, triples, angles, tets, volumes, inv_mats,  ks, kb, gmod, delta, kt_o_omega, chi, forces);
+        if(cf_model_ratio >= min_ratio){
             force_func(nmd, ks, kb, gmod, delta, kt_o_omega, chi, forces);
+            prev_cf = curr_cf;
         }
-        else cblas_daxpy(num_dof, -1., &step[0], 1, &(nmd.points[offset]), 1);
+        else {
+            cblas_daxpy(num_dof, -1., &step[0], 1, &(nmd.points[offset]), 1);
+        }
 
-        prev_cf = curr_cf;
         fmag_sqr = cblas_ddot(num_dof, &forces[offset], 1, &forces[offset], 1);
         //cout << "Updated squared force magnitude: " << fmag_sqr << endl;
         //cout << "Updated energy: " << curr_cf << endl;
         if(fmag_sqr / fmag_sqr_0 < conv_tol_sqr) break;
+        if(step_mag < cgtrpar.conv_tol) break;
     }
 
     if(fmag_sqr / fmag_sqr_0 < conv_tol_sqr){
@@ -1033,6 +1038,7 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     //Data type for timing the relaxation run
     clock_t ct;
     bool parallel = n_threads > 1;
+    double minx, maxx, miny, maxy, minz, maxz;
 
     //double minx, maxx, miny, maxy, minz, maxz;
 
@@ -1137,16 +1143,15 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     maxy = -FLT_MAX;
     minz = FLT_MAX;
     maxz = -FLT_MAX;
-    for(int pt_iter = 0; pt_iter < points.size(); pt_iter += 3){
-        if(points[pt_iter] < minx) minx = points[pt_iter];
-        if(points[pt_iter] > maxx) maxx = points[pt_iter];
-        if(points[pt_iter+1] < miny) miny = points[pt_iter+1];
-        if(points[pt_iter+1] > maxy) maxy = points[pt_iter+1];
-        if(points[pt_iter+2] < minz) minz = points[pt_iter+2];
-        if(points[pt_iter+2] > maxz) maxz = points[pt_iter+2];
+    for(int pt_iter = 0; pt_iter < nmd.points.size(); pt_iter += 3){
+        if(nmd.points[pt_iter] < minx) minx = nmd.points[pt_iter];
+        if(nmd.points[pt_iter] > maxx) maxx = nmd.points[pt_iter];
+        if(nmd.points[pt_iter+1] < miny) miny = nmd.points[pt_iter+1];
+        if(nmd.points[pt_iter+1] > maxy) maxy = nmd.points[pt_iter+1];
+        if(nmd.points[pt_iter+2] < minz) minz = nmd.points[pt_iter+2];
+        if(nmd.points[pt_iter+2] > maxz) maxz = nmd.points[pt_iter+2];
     }
-    cout << "Bounds at the start: (" << minx << ", " << maxx << "), (" << miny << ", " << maxy << "), (" << minz << ", " << maxz << ")\n";
-    */
+    cout << "Bounds at the start: (" << minx << ", " << maxx << "), (" << miny << ", " << maxy << "), (" << minz << ", " << maxz << ")\n";*/
 
     ct = clock();
     if(! parallel){
@@ -1225,39 +1230,39 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
         if(next_prog.num_fine > 0){
             axpy(fine_step, displacement, -1. * next_prog.num_fine);
         }
-        /*egel = calc_gel_energy(points, elements, inv_mats, volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-        cout << "Gel energy before displacement: " << egel << endl;
-        minx = FLT_MAX;
+        //egel = calc_gel_energy(points, elements, inv_mats, volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        //cout << "Gel energy before displacement: " << egel << endl;
+        /*minx = FLT_MAX;
         maxx = -FLT_MAX;
         miny = FLT_MAX;
         maxy = -FLT_MAX;
         minz = FLT_MAX;
         maxz = -FLT_MAX;
-        for(int pt_iter = 0; pt_iter < points.size(); pt_iter += 3){
-            if(points[pt_iter] < minx) minx = points[pt_iter];
-            if(points[pt_iter] > maxx) maxx = points[pt_iter];
-            if(points[pt_iter+1] < miny) miny = points[pt_iter+1];
-            if(points[pt_iter+1] > maxy) maxy = points[pt_iter+1];
-            if(points[pt_iter+2] < minz) minz = points[pt_iter+2];
-            if(points[pt_iter+2] > maxz) maxz = points[pt_iter+2];
+        for(int pt_iter = 0; pt_iter < nmd.points.size(); pt_iter += 3){
+            if(nmd.points[pt_iter] < minx) minx = nmd.points[pt_iter];
+            if(nmd.points[pt_iter] > maxx) maxx = nmd.points[pt_iter];
+            if(nmd.points[pt_iter+1] < miny) miny = nmd.points[pt_iter+1];
+            if(nmd.points[pt_iter+1] > maxy) maxy = nmd.points[pt_iter+1];
+            if(nmd.points[pt_iter+2] < minz) minz = nmd.points[pt_iter+2];
+            if(nmd.points[pt_iter+2] > maxz) maxz = nmd.points[pt_iter+2];
         }
         cout << "Bounds before: (" << minx << ", " << maxx << "), (" << miny << ", " << maxy << "), (" << minz << ", " << maxz << ")\n";*/
         affine_deform(nmd.points, nmd.bounds, displacement);
-        /*egel = calc_gel_energy(points, elements, inv_mats, volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-        cout << "Gel energy after displacement: " << egel << endl;
-        minx = FLT_MAX;
+        //egel = calc_gel_energy(points, elements, inv_mats, volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        //cout << "Gel energy after displacement: " << egel << endl;
+        /*minx = FLT_MAX;
         maxx = -FLT_MAX;
         miny = FLT_MAX;
         maxy = -FLT_MAX;
         minz = FLT_MAX;
         maxz = -FLT_MAX;
-        for(int pt_iter = 0; pt_iter < points.size(); pt_iter+=3){
-            if(points[pt_iter] < minx) minx = points[pt_iter];
-            if(points[pt_iter] > maxx) maxx = points[pt_iter];
-            if(points[pt_iter+1] < miny) miny = points[pt_iter+1];
-            if(points[pt_iter+1] > maxy) maxy = points[pt_iter+1];
-            if(points[pt_iter+2] < minz) minz = points[pt_iter+2];
-            if(points[pt_iter+2] > maxz) maxz = points[pt_iter+2];
+        for(int pt_iter = 0; pt_iter < nmd.points.size(); pt_iter+=3){
+            if(nmd.points[pt_iter] < minx) minx = nmd.points[pt_iter];
+            if(nmd.points[pt_iter] > maxx) maxx = nmd.points[pt_iter];
+            if(nmd.points[pt_iter+1] < miny) miny = nmd.points[pt_iter+1];
+            if(nmd.points[pt_iter+1] > maxy) maxy = nmd.points[pt_iter+1];
+            if(nmd.points[pt_iter+2] < minz) minz = nmd.points[pt_iter+2];
+            if(nmd.points[pt_iter+2] > maxz) maxz = nmd.points[pt_iter+2];
         }
         cout << "Bounds after: (" << minx << ", " << maxx << "), (" << miny << ", " << maxy << "), (" << minz << ", " << maxz << ")\n";*/
         axpy(displacement, total_displacement, 1.);

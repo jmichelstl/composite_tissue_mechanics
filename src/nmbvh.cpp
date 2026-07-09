@@ -57,7 +57,7 @@ NMTetrahedron::NMTetrahedron(vector<double> coordinates, vector<int> tetrahedra,
 
     double minx, maxx, miny, maxy, minz, maxz;
     vector<Vec3D> points(4, Vec3D());
-    Vec3D centroid(0, 0, 0);
+    Vec3D centroid(0., 0., 0.);
 
     index = my_idx;
     assign(points[0], coordinates, tetrahedra[4*index]);
@@ -325,7 +325,7 @@ void NMBVH::search_recursive(vector<int> &hits, Vec3D query, int node_idx){
         int poly_end = poly_start + s_nodes[node_idx].n_polys;
         for(int poly_idx = poly_start; poly_idx < poly_end; poly_idx++){
             if(polyhedra[poly_idx]->contains(query)){
-                hits.push_back(poly_idx);
+                hits.push_back(polyhedra[poly_idx]->get_index());
             }
         }
     }
