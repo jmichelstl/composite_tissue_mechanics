@@ -52,8 +52,9 @@ struct NetworkMeshData {
     vector<int> vertex_ranges, contained_vertices;
     //Reference locations of network vertices, which are used in computing
     //displaced locations using corresponding mesh elements' local affine
-    //transformations
-    vector<double> reference_points; 
+    //transformations, and stretching and bending constants, which can
+    //vary because of the variable lengths of edges in off-lattice networks.
+    vector<double> reference_points, stretching_constants, bending_constants; 
     //Matrix to map network forces onto mesh vertex forces, as well as a
     //SuiteSparse context to manage sparse matrix operations
     cholmod_common common;
@@ -84,19 +85,31 @@ void get_inv_mats(vector<double> points, vector<int> tets, vector<double> &inv_m
 
 void stretching_forces(vector<double> points, vector<int> edges, vector<double> lengths, double k, vector<double> &forces, int start, int end);
 
+void stretching_forces_disjoint(vector<double> points, vector<int> edges, vector<double> lengths, vector<double> constants, vector<double> &forces, int start, int end);
+
 double stretching_energy(vector<double> points, vector<int> edges, vector<double> lengths, double k);
+
+double stretching_energy_disjoint(vector<double> points, vector<int> edges, vector<double> lengths, vector<double> constants);
 
 void stretching_energy_worker(vector<double> points, vector<int> edges, vector<double> lengths, double k, int index, double *energy);
 
+void stretching_energy_worker_disjoint(vector<double> points, vector<int> edges, vector<double> lengths, vector<double> constants, int index, double *energy);
+
 double parallel_stretching_energy(vector<double> points, vector<int> edges, vector<double> lengths, double ks);
 
-void bending_forces(vector<double> pts, vector<int> triples, vector<double> angles, double kb, vector<double> &forces, int start, int end);
+double parallel_stretching_energy_disjoint(vector<double> points, vector<int> edges, vector<double> lengths, vector<double> constants);
 
 void bending_forces(vector<double> pts, vector<int> triples, vector<double> angles, double kb, vector<double> &forces, int start, int end);
+
+void bending_forces_disjoint(vector<double> pts, vector<int> triples, vector<double> angles, vector<double> constants, vector<double> &forces, int start, int end);
 
 double fiber_bending_energy(vector<double> points, vector<int> triples, vector<double> angles, double kb);
 
+double fiber_bending_energy_disjoint(vector<double> points, vector<int> triples, vector<double> angles, vector<double> constants);
+
 double parallel_fiber_bending_energy(vector<double> points, vector<int> triples,vector<double> angles, double kb);
+
+double parallel_fiber_bending_energy_disjoint(vector<double> points, vector<int> triples,vector<double> angles, vector<double> constants);
 
 void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, double g, double excess_osm, double kt_o_omega, double chi, vector<double> &forces, int start, int end);
 
@@ -110,12 +123,16 @@ double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vect
 
 double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi);
 
-void compute_forces_unified(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double kt_o_omega, double chi, vector<double> &forces);
+void compute_forces_unified(NetworkMeshData &nmd, vector<double> params, vector<double> &forces);
 
-void compute_forces_disjoint(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double kt_o_omega, double chi, vector<double> &forces);
+void compute_forces_disjoint(NetworkMeshData &nmd, vector<double> params, vector<double> &forces);
 
-void compute_forces_unified_parallel(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double kt_o_omega, double chi, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
+void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> params, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
 
-void compute_forces_disjoint_parallel(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double kt_o_omega, double chi, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
+void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> mech_params, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
+
+void compute_stretching_constants(NetworkMeshData &nmd, double ks);
+
+void compute_bending_constants(NetworkMeshData &nmd, double kb);
 
 #endif

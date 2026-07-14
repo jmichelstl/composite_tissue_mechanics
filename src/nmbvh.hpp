@@ -41,6 +41,10 @@ class NMPolyhedron {
 
         virtual bool contains(Vec3D point);
 
+        int get_index(){
+            return index;
+        }
+
     protected:
 
         int index;

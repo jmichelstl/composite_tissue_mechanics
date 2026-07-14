@@ -175,6 +175,38 @@ void stretching_forces(vector<double> points, vector<int> edges, vector<double> 
     }
 }
 
+void stretching_forces_disjoint(vector<double> points, vector<int> edges, vector<double> lengths, vector<double> constants, vector<double> &forces, int start, int end){
+
+    Vec3D r1, r2, force;
+    double dist;
+    int iter, idx1, idx2;
+
+    for(iter = start; iter != end; iter ++){
+
+        idx1 = edges[2*iter];
+        idx2 = edges[2*iter + 1];
+
+        r1.x = points[3*idx1];
+        r1.y = points[3*idx1 + 1];
+        r1.z = points[3*idx1 + 2];
+
+        r2.x = points[3*idx2];
+        r2.y = points[3*idx2 + 1];
+        r2.z = points[3*idx2 + 2];
+
+        difference(r2, r1, force);
+        dist = distance(r1, r2);
+        scalar_multiply(force, constants[iter]*(1 - lengths[iter]/dist));
+
+        forces[3*idx1] += force.x;
+        forces[3*idx1 + 1] += force.y;
+        forces[3*idx1 + 2] += force.z;
+        forces[3*idx2] -= force.x;
+        forces[3*idx2 + 1] -= force.y;
+        forces[3*idx2 + 2] -= force.z;
+    }
+}
+
 //Compute fiber stretching energy in a serial manner.
 double stretching_energy(vector<double> points, vector<int> edges, vector<double> lengths, double k){
 
@@ -197,6 +229,32 @@ double stretching_energy(vector<double> points, vector<int> edges, vector<double
 
         dist = distance(r1, r2);
         energy += .5 * k * (dist - lengths[iter])*(dist - lengths[iter]);
+    }
+
+    return energy;
+}
+
+double stretching_energy_disjoint(vector<double> points, vector<int> edges, vector<double> lengths, vector<double> constants){
+
+    Vec3D r1, r2;
+    double dist, energy = 0;
+    int iter, idx1, idx2;
+
+    for(iter = 0; iter < edges.size() / 2; iter ++){
+
+        idx1 = edges[2*iter];
+        idx2 = edges[2*iter + 1];
+
+        r1.x = points[3*idx1];
+        r1.y = points[3*idx1 + 1];
+        r1.z = points[3*idx1 + 2];
+
+        r2.x = points[3*idx2];
+        r2.y = points[3*idx2 + 1];
+        r2.z = points[3*idx2 + 2];
+
+        dist = distance(r1, r2);
+        energy += .5*constants[iter]*(dist-lengths[iter])*(dist-lengths[iter]);
     }
 
     return energy;
@@ -233,6 +291,42 @@ double parallel_stretching_energy(vector<double> points, vector<int> edges, vect
         [&](const tbb::blocked_range<size_t>& r) {
             for(size_t index = r.begin(); index != r.end(); index++){
                 stretching_energy_worker(points, edges, lengths, ks, index, &energies[index]);
+            }
+        }
+    );
+
+    return sum_reduce(&energies[0], &energies[0]+energies.size(), 0.);
+}
+
+void stretching_energy_worker_disjoint(vector<double> points, vector<int> edges, vector<double> lengths, vector<double> constants, int index, double *energy){
+
+    Vec3D r1, r2;
+    double dist;
+    int idx1, idx2;
+
+    idx1 = edges[2*index];
+    idx2 = edges[2*index + 1];
+
+    r1.x = points[3*idx1];
+    r1.y = points[3*idx1 + 1];
+    r1.z = points[3*idx1 + 2];
+
+    r2.x = points[3*idx2];
+    r2.y = points[3*idx2 + 1];
+    r2.z = points[3*idx2 + 2];
+
+    dist = distance(r1, r2);
+    *energy = .5*constants[index]*(dist-lengths[index])*(dist-lengths[index]);
+}
+
+double parallel_stretching_energy_disjoint(vector<double> points, vector<int> edges, vector<double> lengths, vector<double> constants){
+
+    vector<double> energies(edges.size(), 0);
+
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, edges.size()/3),
+        [&](const tbb::blocked_range<size_t>& r) {
+            for(size_t index = r.begin(); index != r.end(); index++){
+                stretching_energy_worker_disjoint(points, edges, lengths, constants, index, &energies[index]);
             }
         }
     );
@@ -328,6 +422,93 @@ void bending_forces(vector<double> pts, vector<int> triples, vector<double> angl
     }
 }
 
+void bending_forces_disjoint(vector<double> pts, vector<int> triples, vector<double> angles, vector<double> constants, vector<double> &forces, int start, int end){
+
+    Vec3D r1, r2, r3, e1, e2, e3, r_21, r_23, f1, f2, f3;
+    double ang, theta, phi, e3mag;
+    int iter, idx1, idx2, idx3;
+
+    for(iter = start; iter != end; iter ++){
+
+        idx1 = triples[3*iter];
+        idx2 = triples[3*iter+1];
+        idx3 = triples[3*iter+2];
+
+        //Load relevant points
+        r1.x = pts[3*idx1];
+        r1.y = pts[3*idx1 + 1];
+        r1.z = pts[3*idx1 + 2];
+
+        r2.x = pts[3*idx2];
+        r2.y = pts[3*idx2 + 1];
+        r2.z = pts[3*idx2 + 2];
+
+        r3.x = pts[3*idx3];
+        r3.y = pts[3*idx3 + 1];
+        r3.z = pts[3*idx3 + 2];
+
+        //Find normal std::vectors from the hinge to each end point
+        difference(r1, r2, r_21);
+        normalize(r_21);
+        difference(r3, r2, r_23);
+        normalize(r_23);
+
+        //Compute an orthogonal triad
+        difference(r1, r2, e1);
+        normalize(e1);
+
+        cross(e1, r_23, e3);
+
+        //If the edges are parallel or very nearly so, either the fiber is
+        //by default straight and is unbent (the likelier scenario), or the
+        //fiber is not perfectly straight by default, in which case an arbitrary
+        //plane normal vector must be computed.
+        e3mag = magnitude(e3);
+        if(e3mag < BENDING_TOL){
+            if(abs(angles[iter] - M_PI) < BENDING_TOL) continue;
+
+            theta = acos(e3.z / e3mag);
+            theta = theta < M_PI / 2 ? theta + M_PI / 2 : theta - M_PI / 2;
+            phi = atan2(e3.y, e3.x);
+            e3.x = sin(theta)*cos(phi);
+            e3.y = sin(theta)*sin(phi);
+            e3.z = cos(theta);
+        }
+
+        else normalize(e3);
+
+        cross(e3, e1, e2);
+        normalize(e2);
+
+        //Find a bending angle
+        ang = atan2(dot(e2, r_23), dot(e1, r_23));
+        if(ang < 0) ang += 2*M_PI;
+
+        //Compute the force on the first index
+        cross(e3, r_21, f1);
+        scalar_multiply(f1,constants[iter]*(ang-angles[iter])/distance(r1, r2));
+
+        //Compute the force on the last index
+        cross(r_23, e3, f3);
+        scalar_multiply(f3,constants[iter]*(ang-angles[iter])/distance(r3, r2));
+
+        //Compute the force on the hinge index by computing minus the sum
+        //of the other two.
+        sum(f1, f3, f2);
+        scalar_multiply(f2, -1);
+
+        forces[idx1*3] += f1.x;
+        forces[idx1*3+1] += f1.y;
+        forces[idx1*3+2] += f1.z;
+        forces[idx2*3] += f2.x;
+        forces[idx2*3+1] += f2.y;
+        forces[idx2*3+2] += f2.z;
+        forces[idx3*3] += f3.x;
+        forces[idx3*3+1] += f3.y;
+        forces[idx3*3+2] += f3.z;
+    }
+}
+
 //Compute fiber bending energy in a serial manner.
 double fiber_bending_energy(vector<double> points, vector<int> triples, vector<double> angles, double kb){
 
@@ -389,6 +570,71 @@ double fiber_bending_energy(vector<double> points, vector<int> triples, vector<d
         ang = atan2(dot(e2, r_23), dot(e1, r_23));
         if(ang < 0) ang += 2*M_PI;
         energy += .5*kb*(ang-angles[iter])*(ang-angles[iter]);
+    }
+
+    return energy;
+}
+
+double fiber_bending_energy_disjoint(vector<double> points, vector<int> triples, vector<double> angles, vector<double> constants){
+
+    Vec3D r1, r2, r3, e1, e2, e3, r_23;
+    double e3mag, ang, theta, phi, energy = 0;
+    int iter, idx1, idx2, idx3;
+
+    for(iter = 0; iter < triples.size() / 3; iter ++){
+
+        idx1 = triples[3*iter];
+        idx2 = triples[3*iter+1];
+        idx3 = triples[3*iter+2];
+
+        //Load relevant points
+        r1.x = points[3*idx1];
+        r1.y = points[3*idx1 + 1];
+        r1.z = points[3*idx1 + 2];
+
+        r2.x = points[3*idx2];
+        r2.y = points[3*idx2 + 1];
+        r2.z = points[3*idx2 + 2];
+
+        r3.x = points[3*idx3];
+        r3.y = points[3*idx3 + 1];
+        r3.z = points[3*idx3 + 2];
+
+        //Find normal vectors from the hinge to each end point
+        difference(r1, r2, e1);
+        normalize(e1);
+        difference(r3, r2, r_23);
+        normalize(r_23);
+
+        //Compute an orthogonal triad
+
+        cross(e1, r_23, e3);
+
+        //If the edges are parallel or very nearly so, either the fiber is
+        //by default straight and is unbent (the likelier scenario), or the
+        //fiber is not perfectly straight by default, in which case an arbitrary
+        //plane normal vector must be computed.
+        e3mag = magnitude(e3);
+        if(e3mag < BENDING_TOL){
+            if(abs(angles[iter] - M_PI) < BENDING_TOL) continue;
+
+            theta = acos(e3.z / e3mag);
+            theta = theta < M_PI / 2 ? theta + M_PI / 2 : theta - M_PI / 2;
+            phi = atan2(e3.y, e3.x);
+            e3.x = sin(theta)*cos(phi);
+            e3.y = sin(theta)*sin(phi);
+            e3.z = cos(theta);
+        }
+
+        else normalize(e3);
+
+        cross(e3, e1, e2);
+        normalize(e2);
+
+        //Find a bending angle
+        ang = atan2(dot(e2, r_23), dot(e1, r_23));
+        if(ang < 0) ang += 2*M_PI;
+        energy += .5*constants[iter]*(ang-angles[iter])*(ang-angles[iter]);
     }
 
     return energy;
@@ -466,6 +712,85 @@ double parallel_fiber_bending_energy(vector<double> points, vector<int> triples,
         [&](const tbb::blocked_range<size_t>& r) {
             for(size_t index = r.begin(); index != r.end(); index++){
                 fiber_bending_energy_worker(points, triples, angles, kb, index, &energies[index]);
+            }
+        }
+    );
+
+    //Sum energies using a parallel reduction
+    return sum_reduce(&energies[0], &energies[0]+energies.size(), 0.);
+}
+
+void fiber_bending_energy_worker_disjoint(vector<double> points, vector<int> triples, vector<double> angles, vector<double> constants, int index, double *energy){
+
+    Vec3D r1, r2, r3, e1, e2, e3, r_23;
+    double ang, theta, phi, e3mag;
+    int idx1, idx2, idx3;
+
+    idx1 = triples[3*index];
+    idx2 = triples[3*index+1];
+    idx3 = triples[3*index+2];
+
+    //Load relevant points
+    r1.x = points[3*idx1];
+    r1.y = points[3*idx1 + 1];
+    r1.z = points[3*idx1 + 2];
+
+    r2.x = points[3*idx2];
+    r2.y = points[3*idx2 + 1];
+    r2.z = points[3*idx2 + 2];
+
+    r3.x = points[3*idx3];
+    r3.y = points[3*idx3 + 1];
+    r3.z = points[3*idx3 + 2];
+
+    //Find normal vectors from the hinge to each end point
+    difference(r1, r2, e1);
+    normalize(e1);
+    difference(r3, r2, r_23);
+    normalize(r_23);
+
+    //Compute an orthogonal triad
+    cross(e1, r_23, e3);
+
+    //If the edges are parallel or very nearly so, either the fiber is
+    //by default straight and is unbent (the likelier scenario), or the
+    //fiber is not perfectly straight by default, in which case an arbitrary
+    //plane normal vector must be computed.
+    e3mag = magnitude(e3);
+    if(e3mag < BENDING_TOL){
+        if(abs(angles[index] - M_PI) < BENDING_TOL){
+            *energy = 0;
+            return;
+        }
+
+        theta = acos(e3.z / e3mag);
+        theta = theta < M_PI / 2 ? theta + M_PI / 2 : theta - M_PI / 2;
+        phi = atan2(e3.y, e3.x);
+        e3.x = sin(theta)*cos(phi);
+        e3.y = sin(theta)*sin(phi);
+        e3.z = cos(theta);
+    }
+
+    else normalize(e3);
+
+    cross(e3, e1, e2);
+    normalize(e2);
+
+    //Find a bending angle
+    ang = atan2(dot(e2, r_23), dot(e1, r_23));
+    if(ang < 0) ang += 2*M_PI;
+    *energy = .5*constants[index]*(ang-angles[index])*(ang-angles[index]);
+}
+
+double parallel_fiber_bending_energy_disjoint(vector<double> points, vector<int> triples,vector<double> angles, vector<double> constants){
+
+    vector<double> energies(triples.size() / 3, 0);
+
+    //Compute energies in parallel
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, triples.size()/3),
+        [&](const tbb::blocked_range<size_t>& r) {
+            for(size_t index = r.begin(); index != r.end(); index++){
+                fiber_bending_energy_worker_disjoint(points, triples, angles, constants, index, &energies[index]);
             }
         }
     );
@@ -888,21 +1213,21 @@ double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrah
 
 //Helper function for computation of restoring forces when the network vertices
 //are a subset of the mesh vertices
-void compute_forces_unified(NetworkMeshData &nmd,  double ks, double kb, double gmod, double delta, double kt_o_omega, double chi, vector<double> &forces){
+void compute_forces_unified(NetworkMeshData &nmd,  vector<double> mech_params, vector<double> &forces){
 
     cblas_dscal(forces.size(), 0, &forces[0], 1);
 
-    gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, gmod, delta, kt_o_omega, chi, forces, 0, nmd.tetrahedra.size() / 4);
+    gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5], forces, 0, nmd.tetrahedra.size() / 4);
     //cout << "Gel force norm: " << cblas_dnrm2(nmd.points.size(), &forces[0], 1) << endl;
 
-    if(ks > 0){
-        stretching_forces(nmd.points, nmd.edges, nmd.lengths, ks, forces, 0, nmd.edges.size()/2);
+    if(mech_params[0] > 0){
+        stretching_forces(nmd.points, nmd.edges, nmd.lengths, mech_params[0], forces, 0, nmd.edges.size()/2);
     }
 
     //cout << "Stretching force norm: " << cblas_dnrm2(nmd.points.size(), &forces[0], 1) << endl;
 
-    if(kb > 0){
-        bending_forces(nmd.points, nmd.triples, nmd.angles, kb, forces, 0, nmd.triples.size()/3);
+    if(mech_params[1] > 0){
+        bending_forces(nmd.points, nmd.triples, nmd.angles, mech_params[1], forces, 0, nmd.triples.size()/3);
     }
 
     //gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, gmod, delta, kt_o_omega, chi, forces, 0, nmd.tetrahedra.size() / 4);
@@ -921,7 +1246,7 @@ void compute_forces_unified(NetworkMeshData &nmd,  double ks, double kb, double 
 
 //Helper function for computation of restoring forces when the network vertices
 //belong to a set that is disjoint from the mesh vertices
-void compute_forces_disjoint(NetworkMeshData &nmd,  double ks, double kb, double gmod, double delta, double kt_o_omega, double chi, vector<double> &forces){
+void compute_forces_disjoint(NetworkMeshData &nmd,  vector<double> mech_params, vector<double> &forces){
 
     cholmod_dense *net_forces, *net_contribution;
     void *net_force_values, *gel_force_values;
@@ -929,18 +1254,18 @@ void compute_forces_disjoint(NetworkMeshData &nmd,  double ks, double kb, double
 
     cblas_dscal(forces.size(), 0, &forces[0], 1);
 
-    gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, gmod, delta, kt_o_omega, chi, forces, 0, nmd.tetrahedra.size() / 4);
+    gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5], forces, 0, nmd.tetrahedra.size() / 4);
 
     //cout << "Gel force magnitude: " << cblas_dnrm2(nmd.points.size()-3*nmd.num_net_verts, &forces[nmd.num_net_verts*3], 1) << endl;
 
-    if(ks > 0){
-        stretching_forces(nmd.points, nmd.edges, nmd.lengths, ks, forces, 0, nmd.edges.size()/2);
+    if(mech_params[0] > 0){
+        stretching_forces(nmd.points, nmd.edges, nmd.lengths, mech_params[0], forces, 0, nmd.edges.size()/2);
     }
 
     //cout << "RMS stretching force: " << cblas_dnrm2(nmd.num_net_verts*3, &forces[0], 1) / sqrt(3.*nmd.num_net_verts) << endl;
 
-    if(kb > 0){
-        bending_forces(nmd.points, nmd.triples, nmd.angles, kb, forces, 0, nmd.triples.size()/3);
+    if(mech_params[1] > 0){
+        bending_forces(nmd.points, nmd.triples, nmd.angles, mech_params[1], forces, 0, nmd.triples.size()/3);
     }
 
     //Project network forces onto the forces on the appropriate mesh vertices
@@ -972,7 +1297,7 @@ void compute_forces_disjoint(NetworkMeshData &nmd,  double ks, double kb, double
 }
 
 //Helper functions to handle parallel force computation
-void compute_forces_unified_parallel(NetworkMeshData &nmd, double ks, double kb, double gmod, double delta, double kt_o_omega, double chi, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
+void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> mech_params, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
 
     int iter, num_dof;
 
@@ -985,19 +1310,19 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, double ks, double kb,
 
     tbb::task_group g;
 
-    if(ks > 0){
+    if(mech_params[0] > 0){
         for(iter = 0; iter < stretch_assignments.size() - 1; iter++){
-            g.run([nmd, ks, &force_sets, stretch_assignments, iter]{
-                stretching_forces(nmd.points, nmd.edges, nmd.lengths, ks, force_sets[iter], stretch_assignments[iter], stretch_assignments[iter+1]);
+            g.run([nmd, mech_params, &force_sets, stretch_assignments, iter]{
+                stretching_forces(nmd.points, nmd.edges, nmd.lengths, mech_params[0], force_sets[iter], stretch_assignments[iter], stretch_assignments[iter+1]);
             });
         }
         g.wait();
     }
 
-    if(kb > 0){
+    if(mech_params[1] > 0){
         for(iter = 0; iter < bend_assignments.size() - 1; iter++){
-            g.run([nmd, kb, &force_sets, bend_assignments, iter]{
-                bending_forces(nmd.points, nmd.triples, nmd.angles, kb, force_sets[iter], bend_assignments[iter], bend_assignments[iter+1]);
+            g.run([nmd, mech_params, &force_sets, bend_assignments, iter]{
+                bending_forces(nmd.points, nmd.triples, nmd.angles, mech_params[1], force_sets[iter], bend_assignments[iter], bend_assignments[iter+1]);
             });
         }
         g.wait();
@@ -1005,8 +1330,8 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, double ks, double kb,
 
     if(nmd.tetrahedra.size()){
         for(iter = 0; iter < gel_assignments.size() - 1; iter++){
-            g.run([nmd, gmod, delta, kt_o_omega, chi, &force_sets, gel_assignments, iter]{
-                gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, gmod, delta, kt_o_omega, chi, force_sets[iter], gel_assignments[iter], gel_assignments[iter+1]);
+            g.run([nmd, mech_params, &force_sets, gel_assignments, iter]{
+                gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5], force_sets[iter], gel_assignments[iter], gel_assignments[iter+1]);
             });
         }
         g.wait();
@@ -1028,7 +1353,7 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, double ks, double kb,
     }
 }
 
-void compute_forces_disjoint_parallel(NetworkMeshData &nmd,  double ks, double kb, double gmod, double delta, double kt_o_omega, double chi, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
+void compute_forces_disjoint_parallel(NetworkMeshData &nmd,  vector<double> mech_params, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
 
     int iter, num_dof;
     cholmod_dense *net_forces, *net_contribution;
@@ -1044,21 +1369,25 @@ void compute_forces_disjoint_parallel(NetworkMeshData &nmd,  double ks, double k
         cblas_dscal(num_dof, 0, &force_sets[iter][0], 1);
     }
 
-    gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, gmod, delta, kt_o_omega, chi, forces, 0, nmd.tetrahedra.size() / 4);
+    for(iter = 0; iter < gel_assignments.size(); iter ++){
+        g.run([&nmd, mech_params, &force_sets, gel_assignments, iter]{
+            gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5], force_sets[iter], 0, nmd.tetrahedra.size() / 4);
+        });
+    }
 
-    if(ks > 0){
+    if(mech_params[0] > 0){
         for(iter = 0; iter < stretch_assignments.size() - 1; iter++){
-            g.run([nmd, ks, &force_sets, stretch_assignments, iter]{
-                stretching_forces(nmd.points, nmd.edges, nmd.lengths, ks, force_sets[iter], stretch_assignments[iter], stretch_assignments[iter+1]);
+            g.run([nmd, &force_sets, stretch_assignments, iter]{
+                stretching_forces_disjoint(nmd.points, nmd.edges, nmd.lengths, nmd.stretching_constants, force_sets[iter], stretch_assignments[iter], stretch_assignments[iter+1]);
             });
         }
         g.wait();
     }
 
-    if(kb > 0){
+    if(mech_params[1] > 0){
         for(iter = 0; iter < bend_assignments.size() - 1; iter++){
-            g.run([nmd, kb, &force_sets, bend_assignments, iter]{
-                bending_forces(nmd.points, nmd.triples, nmd.angles, kb, force_sets[iter], bend_assignments[iter], bend_assignments[iter+1]);
+            g.run([nmd, &force_sets, bend_assignments, iter]{
+                bending_forces_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants, force_sets[iter], bend_assignments[iter], bend_assignments[iter+1]);
             });
         }
         g.wait();
@@ -1232,3 +1561,25 @@ bool compute_network_mesh_map(NetworkMeshData &nmd){
 
     return true;
 }
+
+//Lengths should be defined before this function is called
+void compute_stretching_constants(NetworkMeshData &nmd, double ks){
+
+    for(int iter = 0; iter < nmd.edges.size(); iter ++){
+        nmd.stretching_constants.push_back(ks / nmd.lengths[iter]);
+    }
+}
+
+void compute_bending_constants(NetworkMeshData &nmd, double kb){
+
+    int trip_iter, idx1, idx2, idx3;
+    Vec3D p1, p2, p3;
+
+    for(trip_iter = 0; trip_iter < nmd.triples.size(); trip_iter += 3){
+        assign(p1, nmd.points, nmd.triples[trip_iter]);
+        assign(p2, nmd.points, nmd.triples[trip_iter+1]);
+        assign(p3, nmd.points, nmd.triples[trip_iter+2]);
+        nmd.bending_constants.push_back(2*kb/(distance(p1,p2)+distance(p1,p3)));
+    }
+}
+
