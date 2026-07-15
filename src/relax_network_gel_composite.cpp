@@ -1517,6 +1517,12 @@ void relaxation_batch(string base_name, string tag, string extension, vector<dou
         return;
     }
 
+    cout << "Network files: " << endl;
+    for(string net_file : net_files) cout << net_file << endl;
+
+    cout << "Disp files: " << endl;
+    for(string disp_file : disp_files) cout << disp_file << endl;
+
     for(iter = 0; iter < net_files.size(); iter ++){
         do_relaxation_run(net_files[iter], log_files[iter], edat_files[iter], disp_files[iter], mech_params, cgtrpar, progs, strain_mode, n_threads, type);
     }

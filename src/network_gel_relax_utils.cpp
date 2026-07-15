@@ -1265,7 +1265,7 @@ void compute_forces_disjoint(NetworkMeshData &nmd,  vector<double> mech_params, 
     //cout << "RMS stretching force: " << cblas_dnrm2(nmd.num_net_verts*3, &forces[0], 1) / sqrt(3.*nmd.num_net_verts) << endl;
 
     if(mech_params[1] > 0){
-        bending_forces(nmd.points, nmd.triples, nmd.angles, mech_params[1], forces, 0, nmd.triples.size()/3);
+        bending_forces_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants, forces, 0, nmd.triples.size()/3);
     }
 
     //Project network forces onto the forces on the appropriate mesh vertices
@@ -1579,7 +1579,7 @@ void compute_bending_constants(NetworkMeshData &nmd, double kb){
         assign(p1, nmd.points, nmd.triples[trip_iter]);
         assign(p2, nmd.points, nmd.triples[trip_iter+1]);
         assign(p3, nmd.points, nmd.triples[trip_iter+2]);
-        nmd.bending_constants.push_back(2*kb/(distance(p1,p2)+distance(p1,p3)));
+        nmd.bending_constants.push_back(2*kb/(distance(p1,p2)+distance(p2,p3)));
     }
 }
 

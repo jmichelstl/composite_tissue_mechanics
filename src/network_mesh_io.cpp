@@ -897,7 +897,7 @@ bool open_network_mesh_trajectory(string output, string nmc_file, RelaxParams pa
     fprintf(xml_handle, xml_header.c_str());
     fprintf(xml_handle, "<NetworkMeshTrajectory>\n");
 
-    fprintf(xml_handle, "\t<parameters>\n");
+    fprintf(xml_handle, "\n\t<parameters>\n");
     fprintf(xml_handle, "\t\t<param name=\"stretch\" value=\"%1.10le\"/>\n", params.stretch);
     fprintf(xml_handle, "\t\t<param name=\"bend\" value=\"%1.10le\"/>\n", params.bend);
     fprintf(xml_handle, "\t\t<param name=\"gel_mod\" value=\"%1.10le\"/>\n", params.gel_mod);
@@ -907,7 +907,7 @@ bool open_network_mesh_trajectory(string output, string nmc_file, RelaxParams pa
     fprintf(xml_handle, "\t</parameters>\n");
 
     //Open the series of relaxation steps
-    fprintf(xml_handle, "\n<relaxation_run reference_file=\"%s\">\n", nmc_file.c_str());
+    fprintf(xml_handle, "\n\t<relaxation_run reference_file=\"%s\">\n", nmc_file.c_str());
     fclose(xml_handle);
 
     return true;
@@ -962,7 +962,7 @@ bool close_network_mesh_trajectory(string xml_name){
 	    return false;
     }
 
-    fprintf(xml_handle, "</relaxation_run>\n\n</NetworkMeshTrajectory>\n");
+    fprintf(xml_handle, "\t</relaxation_run>\n\n</NetworkMeshTrajectory>\n");
     fclose(xml_handle);
 
     return true;
