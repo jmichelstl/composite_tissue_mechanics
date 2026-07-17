@@ -6,6 +6,8 @@
 #include "geometric_primitives.hpp"
 #include <iostream>
 #include <tinyxml2.h>
+#include <stdlib.h>
+#include <string.h>
 
 using namespace std;
 using namespace tinyxml2;
@@ -214,10 +216,31 @@ bool parse_net3d(char* file_name, Net3D &network_desc){
 
     XMLDocument doc;
     XMLElement *root;
+    char *n3d_dir_name, *full_path;
 
-    if(doc.LoadFile(file_name) != XML_SUCCESS){
-        cerr << "The specified file could not be loaded.\n";
-        return false;
+    full_path = NULL;
+
+    //Check whether the N3D_DIR environment variable is set. If so, append
+    //this string to the file name.
+    if((n3d_dir_name = getenv("N3D_DIR"))){
+        full_path = (char *) malloc(sizeof(char) * (strlen(file_name) + strlen(n3d_dir_name) + 1));
+        sprintf(full_path, "%s%s", n3d_dir_name, file_name);
+    }
+
+    if(full_path){
+        if(doc.LoadFile(full_path) != XML_SUCCESS){
+            cerr << "The specified file could not be loaded.\n";
+            free(full_path);
+            return false;
+        }
+        free(full_path);
+    }
+
+    else {
+        if(doc.LoadFile(file_name) != XML_SUCCESS){
+            cerr << "The specified file could not be loaded.\n";
+            return false;
+        }
     }
 
     root = doc.RootElement();
