@@ -741,6 +741,9 @@ bool LatticeBasedNMC::build_network(){
     bounds.set_max_y(true_maxy);
     bounds.set_max_z(true_maxz);
 
+    cout << "Number of points: " << points.size() << endl;
+    cout << "Number of edges: " << edges.size() << endl;
+
     //Find all pairs of collinear, contiguous bonds
     compute_triples();
 

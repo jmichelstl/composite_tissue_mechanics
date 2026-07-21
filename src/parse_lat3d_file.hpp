@@ -223,11 +223,19 @@ bool parse_net3d(char* file_name, Net3D &network_desc){
     //Check whether the N3D_DIR environment variable is set. If so, append
     //this string to the file name.
     if((n3d_dir_name = getenv("N3D_DIR"))){
-        full_path = (char *) malloc(sizeof(char) * (strlen(file_name) + strlen(n3d_dir_name) + 1));
-        sprintf(full_path, "%s%s", n3d_dir_name, file_name);
+        full_path = (char *) malloc(sizeof(char) * (strlen(file_name) + strlen(n3d_dir_name) + 2));
+        //Make sure there is a "/" delimiter separating the directory and file
+        //name
+        if(n3d_dir_name[strlen(n3d_dir_name)-1] == '/'){
+            sprintf(full_path, "%s%s", n3d_dir_name, file_name);
+        }
+        else{
+            sprintf(full_path, "%s/%s", n3d_dir_name, file_name);
+        }
     }
 
     if(full_path){
+        printf("File path: %s\n", full_path);
         if(doc.LoadFile(full_path) != XML_SUCCESS){
             cerr << "The specified file could not be loaded.\n";
             free(full_path);
