@@ -423,11 +423,6 @@ inline void create_face_simple(double lc, double s1, double s2, Vec3D center, Ve
     //of the face.
     sort(points.begin(), points.end(), ccw_sort(center, v1, v2));
 
-    cout << "Face vertices: " << endl;
-    for(Vec3D pt : points){
-        cout << "\t" << pt.x << ", " << pt.y << ", " << pt.z << endl;
-    }
-
     for(iter = 0; iter < points.size(); iter ++){
 
         current = points[iter];
@@ -655,7 +650,7 @@ bool LatticeBasedNMC::build_network(){
     LatticeRow row;
     LatticePoint point;
     double curr_x, curr_y, curr_z, neigh_x, neigh_y, neigh_z;
-    double true_maxx = FLT_MIN, true_maxy = FLT_MIN, true_maxz = FLT_MIN;
+    double true_maxx = -FLT_MAX, true_maxy = -FLT_MAX, true_maxz = -FLT_MAX;
     int slice_iter, row_iter, point_iter, curr_idx, neigh_idx;
     Vec3D curr_point, neighbor;
     map<Vec3D, int> pmap;
@@ -699,7 +694,7 @@ bool LatticeBasedNMC::build_network(){
             curr_x = bounds.min_x() + row.x_offset;
             point_iter = 0;
             curr_point.y = curr_y;
-            while(curr_x < bounds.max_x()){
+            while(curr_x <= bounds.max_x()){
                 if(curr_x > true_maxx) true_maxx = curr_x;
                 point = row.points[point_iter];
                 curr_point.x = curr_x;
@@ -740,9 +735,6 @@ bool LatticeBasedNMC::build_network(){
     bounds.set_max_x(true_maxx);
     bounds.set_max_y(true_maxy);
     bounds.set_max_z(true_maxz);
-
-    cout << "Number of points: " << points.size() << endl;
-    cout << "Number of edges: " << edges.size() << endl;
 
     //Find all pairs of collinear, contiguous bonds
     compute_triples();
