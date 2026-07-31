@@ -42,13 +42,11 @@ void visualize_network(vector<double> coords, vector<int> edges, vtkSmartPointer
     vtkSmartPointer<vtkVertex> vertex;
     vtkSmartPointer<vtkPolyLine> line_ptr;
 
-    cout << "Checkpoint 1\n";
-
     //Determine which points are actually included in the network, and create
     //a reduced point set
     for(int next_vertex : edges){
         if(next_vertex > coords.size() / 3){
-            cout << "Out of bounds coordinate: " << next_vertex << endl;
+            cerr << "Out of bounds coordinate: " << next_vertex << endl;
         }
         if(pmap.find(next_vertex) == pmap.end()){
             pmap.insert(make_pair(next_vertex, new_idx++));
@@ -56,16 +54,12 @@ void visualize_network(vector<double> coords, vector<int> edges, vtkSmartPointer
         }
     }
 
-    cout << "Checkpoint 2\n";
-
     for(Vec3D next_point : point_list){
         points->InsertNextPoint(next_point.x, next_point.y, next_point.z);
         vertex = vtkSmartPointer<vtkVertex>::New();
         vertex->GetPointIds()->SetId(0, vert_idx++);
         verts->InsertNextCell(vertex);
     }
-
-    cout << "Checkpoint 3\n";
 
     //Construct edges as pairs of indices into the list of retained points
     for(int edge_iter = 0; edge_iter  < edges.size() / 2; edge_iter++){
@@ -75,8 +69,6 @@ void visualize_network(vector<double> coords, vector<int> edges, vtkSmartPointer
         line_ptr->GetPointIds()->SetId(1, pmap[edges[2*edge_iter+1]]);
         lines->InsertNextCell(line_ptr);
     }
-
-    cout << "Checkpoint 4\n";
 
     polydata_ptr->SetPoints(points);
     polydata_ptr->SetVerts(verts);
@@ -250,16 +242,12 @@ int main(int argc, char **argv){
         //Report each saved state of the network in turn
         dec_digits = get_dec_digits(run.steps.size());
         seq_num = 0;
-        cout << "Decimal digits: " << dec_digits << endl;
         for(RelaxationStep rs : run.steps){
-            cout << "Attempting to read coordinate data\n";
-            cout << "Seeking " << rs.xsize << " bytes describing " << coords.size()/3 << " coordinates.\n";
             if((zlib_status = inf(nmt_handle, rs.xsize, &coords[0])) != Z_OK){
                 cerr << "Error reading a chunk of coordinate data.\n";
                 fclose(nmt_handle);
                 return 5;
             }
-            cout << "Obtained coordinate data.\n";
             visualize_nmc(coords, edges, tets, vtk_name(output_base, seq_num++, dec_digits));
         }
 
