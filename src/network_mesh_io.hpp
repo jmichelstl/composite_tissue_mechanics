@@ -13,30 +13,12 @@
 #include "network_mesh_complex.hpp"
 #include <tinyxml2.h>
 #include <memory>
+#include <map>
+#include <string>
 
 using namespace std;
 
 //Functionality for writing and reading data related to relaxation runs
-
-//Expected number of parameters
-#define EXPECTED_PARAM_COUNT 6
-
-//Type to represent the physical parameters for relaxation run
-struct RelaxParams {
-
-    RelaxParams(){}
-
-    RelaxParams(double ks, double kb, double gm, double eo, double ut, double my_chi){
-        stretch = ks;
-	    bend = kb;
-        gel_mod = gm;
-        excess_osm = eo;
-        u_thermal = ut;
-        chi = my_chi;
-    }
-
-    double stretch, bend, gel_mod, excess_osm, u_thermal, chi;
-};
 
 //Type to represent one of a series of steps in a relaxation run, with
 //information about the imposed displacement and the sizes of the compressed
@@ -55,11 +37,16 @@ struct RelaxationStep {
 
 struct NMCRelaxationRun {
 
-    NMCRelaxationRun(){}
+    NMCRelaxationRun(){
+        ks = 0;
+        kb = 0;
+    }
 
-    RelaxParams params;
+    //RelaxParams params;
+    double ks, kb;
+    map<string, double> gel_params;
     vector<RelaxationStep> steps;
-    string nmc_name;
+    string nmc_name, energy_expression;
 };
 
 //Tools for reading and writing the intial state of a network
@@ -77,7 +64,7 @@ bool report_disjoint_network_mesh_complex(char *file_name, shared_ptr<RandomNMCB
 bool extract_disjoint_network_mesh_complex(char *file_name, vector<double> &coordinates, unsigned &num_net_verts, vector<int> &edges, vector<int> &triples, vector<double> &angles, vector<int> &tets, vector<int> &vert_ranges, vector<int> &contained_verts);
 
 //Open a manifest describing a relaxation run
-bool open_network_mesh_trajectory(string output, string nmc_file, RelaxParams params, string &xml_name, string &nmt_name);
+bool open_network_mesh_trajectory(string output, string nmc_file, double ks, double kb, char *expr, char **par_names, vector<double> par_values, string &xml_name, string &nmt_name);
 
 //Append a state of the network-mesh complex
 bool append_network_mesh_state(Vec3D disp, vector<double> coordinates, string xml_name, string nmt_name);

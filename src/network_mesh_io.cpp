@@ -875,7 +875,8 @@ bool extract_disjoint_network_mesh_complex(char *file_name, vector<double> &coor
 }
 
 //Open a manifest describing a relaxation run
-bool open_network_mesh_trajectory(string output, string nmc_file, RelaxParams params, string &xml_name, string &nmt_name){
+//bool open_network_mesh_trajectory(string output, string nmc_file, RelaxParams params, string &xml_name, string &nmt_name){
+bool open_network_mesh_trajectory(string output, string nmc_file, double ks, double kb, char *expr, char **par_names, vector<double> par_values, string &xml_name, string &nmt_name){
 
     FILE *xml_handle;
     ostringstream name;
@@ -898,12 +899,25 @@ bool open_network_mesh_trajectory(string output, string nmc_file, RelaxParams pa
     fprintf(xml_handle, "<NetworkMeshTrajectory>\n");
 
     fprintf(xml_handle, "\n\t<parameters>\n");
-    fprintf(xml_handle, "\t\t<param name=\"stretch\" value=\"%1.10le\"/>\n", params.stretch);
-    fprintf(xml_handle, "\t\t<param name=\"bend\" value=\"%1.10le\"/>\n", params.bend);
-    fprintf(xml_handle, "\t\t<param name=\"gel_mod\" value=\"%1.10le\"/>\n", params.gel_mod);
-    fprintf(xml_handle, "\t\t<param name=\"excess_osm\" value=\"%1.10le\"/>\n", params.excess_osm);
-    fprintf(xml_handle, "\t\t<param name=\"u_thermal\" value=\"%1.10le\"/>\n", params.u_thermal);
-    fprintf(xml_handle, "\t\t<param name=\"chi\" value=\"%1.10le\"/>\n", params.chi);
+
+    fprintf(xml_handle, "\t\t<param name=\"stretch\" value=\"%1.10le\"/>\n",ks);
+    fprintf(xml_handle, "\t\t<param name=\"bend\" value=\"%1.10le\"/>\n", kb);
+
+    cout << "Reached this point.\n";
+
+    printf("Parameter names: %lx\n", par_names);
+
+    if(par_names){
+        fprintf(xml_handle, "\t\t<GelModel function=\"%s\">\n", expr);
+        for(int iter = 0; iter < par_values.size(); iter++){
+            printf("Parameter name: %s, Value: %1.10lf\n", par_names[iter], par_values[iter]);
+            fprintf(xml_handle, "\t\t\t<param name=\"%s\" value=\"%1.10le\"/>\n", par_names[iter], par_values[iter]);
+        }
+        fprintf(xml_handle, "\t\t<GelModel/>\n");
+    }
+
+    cout << "Reached this point.\n";
+
     fprintf(xml_handle, "\t</parameters>\n");
 
     //Open the series of relaxation steps
@@ -939,12 +953,6 @@ bool append_network_mesh_state(Vec3D disp, vector<double> coordinates, string xm
 	    return false;
     }
     fprintf(xml_handle, "xsize=\"%u\"/>\n", num_written); 
-
-    /*if( def((void *) &energies[0], energies.size()*sizeof(double), nmt_handle, &num_written) != Z_OK){
-        cerr << "Error writing energy data.\n";
-	return false;
-    }
-    fprintf(xml_handle, "esize=\"%d\"/>\n", num_written);*/
 
     fclose(xml_handle);
     fclose(nmt_handle);
@@ -992,8 +1000,40 @@ bool parse_nmc_param(XMLElement *param_elem, string &name, double &value){
     return true;
 }
 
+bool parse_gel_block(XMLElement *gel_block, NMCRelaxationRun &run){
+
+    XMLError result;
+    const char *name;
+    XMLElement *child;
+    string par_name;
+    double value;
+    const char *expr_name;
+
+    //Attempt to read the constitutive relation
+    result = gel_block->QueryStringAttribute("function", &expr_name);
+    if(result != XML_SUCCESS){
+        cerr << "Error: the constitutive relation could not be read.\n";
+	    return false;
+    }
+    run.energy_expression = string(expr_name);
+
+    //Read parameters of the gel constitutive model 
+    child = gel_block->FirstChildElement("param");
+    while(child){
+        if(! parse_nmc_param(child, par_name, value)){
+            cerr << "Parsing of a gel parameter failed.\n";
+            return false;
+        }
+        run.gel_params.insert(make_pair(par_name, value));
+	    gel_block->DeleteChild(child);
+	    child = gel_block->FirstChildElement("param");
+    }
+
+    return true;
+}
+
 //Parse a parameter block of a network-mesh trajectory file
-bool parse_nmc_param_block(XMLElement *param_block, NMCRelaxationRun run){
+bool parse_nmc_param_block(XMLElement *param_block, NMCRelaxationRun &run){
 
     int param_count = 0;
     string name;
@@ -1001,7 +1041,7 @@ bool parse_nmc_param_block(XMLElement *param_block, NMCRelaxationRun run){
     XMLElement *child;
 
     child = param_block->FirstChildElement("param");
-    while(child != NULL && param_count < EXPECTED_PARAM_COUNT){
+    while(child != NULL){
 
         if(! parse_nmc_param(child, name, value)){
             cerr << "Parsing of the parameter block failed.\n";
@@ -1009,27 +1049,11 @@ bool parse_nmc_param_block(XMLElement *param_block, NMCRelaxationRun run){
         }
 
 	    if(name == "stretch"){
-            run.params.stretch = value;
+            run.ks = value;
             param_count ++;
         }
 	    else if(name == "bend"){
-            run.params.bend = value;
-            param_count ++;
-        }
-	    else if(name == "gel_mod"){
-            run.params.gel_mod = value;
-            param_count ++;
-        }
-	    else if(name == "excess_osm"){
-            run.params.excess_osm = value;
-            param_count ++;
-        }
-	    else if(name == "u_thermal"){
-            run.params.u_thermal = value;
-            param_count ++;
-        }
-	    else if(name == "chi"){
-            run.params.chi = value;
+            run.kb = value;
             param_count ++;
         }
 	    else{
@@ -1041,11 +1065,15 @@ bool parse_nmc_param_block(XMLElement *param_block, NMCRelaxationRun run){
 	    child = param_block->FirstChildElement("param");
     }
 
-    if(param_count < EXPECTED_PARAM_COUNT){
-        cerr << "Too few physical parameters were read.\n";
+    child = param_block->FirstChildElement("GelModel");
+    if(child){
+        if(! parse_gel_block(child, run)){
+            cerr << "Parsing of information about the gel model failed.\n";
+            return false;
+        }
     }
 
-    return param_count == EXPECTED_PARAM_COUNT;
+    return true;
 }
 
 //Parse information about the saved state of a network
@@ -1085,13 +1113,6 @@ bool parse_relaxation_step(XMLElement *step_elem, NMCRelaxationRun &run){
 	    return false;
     }
     rstep.xsize = size;
-
-    /*result = step_elem->QueryUnsignedAttribute("esize", &size);
-    if(result != XML_SUCCESS){
-        cerr << "The compressed energy size could not be read.\n";
-	    return false;
-    }
-    rstep.esize = size;*/
 
     run.steps.push_back(rstep);
 
@@ -1164,7 +1185,7 @@ bool import_network_mesh_trajectory(string base_name, NMCRelaxationRun &run, FIL
     }
 
     else if(strcmp(root->Name(), "NetworkMeshTrajectory") != 0){
-        cerr << "The root node must be ACCTrajectory\n";
+        cerr << "The root node must be NetworkMeshTrajectory\n";
         return false;
     }
 

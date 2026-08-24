@@ -29,12 +29,11 @@ lib/libgeomprim.a:
 
 lib/librandompointproc.a:
 	mkdir -p lib
-	#$(gcc) $(ONEAPI_INC) $(VORO_INC) -c src/random_point_processes.cpp -o lib/librandompointproc.a -L./lib -lgeomprim -lvoro++ $(ONEAPI_LINK) -ltbb
 	$(gcc) $(ONEAPI_INC) $(VORO_INC) -c src/random_point_processes.cpp -o lib/librandompointproc.a 
 
 lib/libnmc.a:
 	mkdir -p lib
-	$(gcc) $(VORO_INC) $(ONEAPI_INC) -c src/network_mesh_complex.cpp -o lib/libnmc.a -D TETLIBRARY
+	$(gcc) $(VORO_INC) $(ONEAPI_INC) -c src/network_mesh_complex.cpp -o lib/libnmc.a
 
 lib/libnmio.a:
 	mkdir -p lib
@@ -56,7 +55,7 @@ nmcbatch: lib/libgeomprim.a lib/libnmc.a lib/libnmio.a lib/librandompointproc.a 
 	$(gcc) $(ONEAPI_INC) -o nmcbatch src/network_mesh_batch.cpp -ltinyxml2 -L/usr/lib/x86_64-linux-gnu/ -lgmsh -L./lib -lgeomprim -lnmc -lnmio -lnmbvh -lz -lvoro++ -lrandompointproc $(ONEAPI_LINK) -ltbb -lpredicates
 
 ngrelax: lib/libgeomprim.a lib/libflists.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a lib/libngru.a lib/libnmbvh.a lib/libpredicates.a
-	$(gcc) $(ONEAPI_INC) -o ngrelax src/relax_network_gel_composite.cpp -L./lib -lgeomprim -lnmc -lnmio -lflists -lrandompointproc -lngru -lnmbvh -lgmsh -lz $(ONEAPI_LINK) -ltbb $(MKL_LINK) -ltinyxml2 -lboost_filesystem -lboost_regex -lvoro++ -lcholmod -lpredicates
+	$(gcc) $(ONEAPI_INC) -o ngrelax src/relax_network_gel_composite.cpp -L./lib -lgeomprim -lnmc -lnmio -lflists -lrandompointproc -lngru -lnmbvh -lgmsh -lz $(ONEAPI_LINK) -ltbb $(MKL_LINK) -ltinyxml2 -lboost_filesystem -lboost_regex -lvoro++ -lcholmod -lpredicates -lmatheval
 
 nmtraj_viz: lib/libgeomprim.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.a lib/libnmbvh.a lib/libpredicates.a
 	$(gcc) $(VTK_INC) -o nmtraj_viz src/visualize_network_mesh.cpp -L./lib -lgeomprim -lnmc -lnmio -lrandompointproc -lnmbvh -lgmsh -lz -lvoro++ $(VTK_LINK) $(ONEAPI_LINK) -ltbb -lpredicates

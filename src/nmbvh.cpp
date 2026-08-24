@@ -20,13 +20,6 @@ Bounds3D box_union(Bounds3D box1, Bounds3D box2){
     return Bounds3D(minx, maxx, miny, maxy, minz, maxz);
 }
 
-/*void print_bounds(Bounds3D box){
-
-    cout << "(" << box.min_x() << ", " << box.max_x() << "), ";
-    cout << "(" << box.min_y() << ", " << box.max_y() << "), ";
-    cout << "(" << box.min_z() << ", " << box.max_z() << ")\n";
-}*/
-
 NMPolyhedron::~NMPolyhedron(){}
 
 bool NMPolyhedron::contains(Vec3D pt){
@@ -85,12 +78,6 @@ NMTetrahedron::NMTetrahedron(vector<double> coordinates, vector<int> tetrahedra,
     centroid.y /= 4.;
     centroid.z /= 4.;
 
-    /*cout << "Vertices: \n";
-    for(int iter = 0; iter < 4; iter ++){
-        cout << vertices[3*iter] << ", " << vertices[3*iter+1] << ", " << vertices[3*iter+2] << endl;
-    }
-    print_bounds(bounds);*/
-
     //Make sure each face is properly oriented
     add_face(points, 0, 1, 2, centroid, faces, 0);
     add_face(points, 0, 1, 3, centroid, faces, 1);
@@ -106,12 +93,6 @@ bool NMTetrahedron::contains(Vec3D pt){
     pd[0] = pt.x;
     pd[1] = pt.y;
     pd[2] = pt.z;
-
-    /*cout << "Query point: " << pt.x << ", " << pt.y << ", " << pt.z << endl;
-    cout << "Vertices: \n";
-    for(int iter = 0; iter < 4; iter ++){
-        cout << vertices[3*iter] << ", " << vertices[3*iter+1] << ", " << vertices[3*iter+2] << endl;
-    }*/
 
     for(int iter = 0; iter < 4; iter++){
         idx1 = faces[3*iter];
@@ -289,12 +270,6 @@ void NMBVH::index_polyhedra() {
         s_nodes.push_back(BVHSearchNode());
     }
     flatten_tree(root, &offset);
-    /*std::cout << "Final bounds: ";
-    Bounds3D outer_bounds = s_nodes[0].bounds;
-    std::cout << "(" << outer_bounds.min_x() << ", " << outer_bounds.max_x() << ") ";
-    std::cout << "(" << outer_bounds.min_y() << ", " << outer_bounds.max_y() << ") ";
-    std::cout << "(" << outer_bounds.min_z() << ", " << outer_bounds.max_z() << ")\n";*/
-
 }
 
 NMBVH::NMBVH(vector<double> coordinates, vector<int> tetrahedra, Bounds3D bounds) : bounds(bounds) {
@@ -310,10 +285,6 @@ NMBVH::NMBVH(vector<double> coordinates, vector<int> tetrahedra, Bounds3D bounds
         }
     );
     polyhedra.assign(nm_tetrahedra.begin(), nm_tetrahedra.end());
-    /*for(int iter = 0; iter < tetrahedra.size() / 4; iter ++){
-        polyhedra.push_back(make_shared<NMTetrahedron>(coordinates, tetrahedra, iter));
-    }*/
-
     index_polyhedra();
 }
 
@@ -334,17 +305,9 @@ void NMBVH::search_recursive(vector<int> &hits, Vec3D query, int node_idx){
         if(s_nodes[node_idx+1].bounds.in_bounds(query)){
             search_recursive(hits, query, node_idx+1);
         }
-        else{
-            /*cout << "Point " << query.x << ", " << query.y << ", " << query.z << " not in " << "box ";
-            print_bounds(s_nodes[node_idx+1].bounds);*/
-        }
         int offset = s_nodes[node_idx].secondChildOffset;
         if(s_nodes[offset].bounds.in_bounds(query)){
             search_recursive(hits, query, offset);
-        }
-        else{
-            /*cout << "Point " << query.x << ", " << query.y << ", " << query.z << " not in " << "box ";
-            print_bounds(s_nodes[offset].bounds);*/
         }
     }
 }
@@ -352,8 +315,6 @@ void NMBVH::search_recursive(vector<int> &hits, Vec3D query, int node_idx){
 vector<int> NMBVH::containing_polyhedra(Vec3D query){
 
     vector<int> hits;
-
-    //cout << "Query here: " << query.x << ", " << query.y << ", " << query.z << endl;
 
     if(s_nodes.size() == 0) return hits;
 

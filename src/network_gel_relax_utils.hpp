@@ -11,6 +11,7 @@
 #define NGRU
 
 #include <vector>
+#include <set>
 #include <unordered_set>
 #include <suitesparse/cholmod.h>
 #include <functional>
@@ -18,8 +19,12 @@
 #include <mkl_cblas.h>
 #include "geometric_primitives.hpp"
 #include "network_mesh_io.hpp"
+#include <nlohmann/json.hpp>
+#include <matheval.h>
+#include <iostream>
 
 using namespace std;
+using json = nlohmann::json;
 
 #define BENDING_TOL 1e-12
 
@@ -28,6 +33,176 @@ using namespace std;
 //(disjoint)
 enum class nmc_type {unified, disjoint};
 
+double compute_i1(double def_grad[9]);
+
+double compute_i2(double def_grad[9]);
+
+double compute_j(double def_grad[9]);
+
+void pk_i1_contribution(double e_derivative, double def_grad[9], double pk_stress[9]);
+
+void pk_i2_contribution(double e_derivative, double def_grad[9], double pk_stress[9]);
+
+void pk_j_contribution(double e_derivative, double def_grad[9], double pk_stress[9]);
+
+
+//Struct to hold the data needed to describe the model of the gel deformation
+//energy and support the computation of forces derived from this energy
+struct GelModel {
+
+    GelModel(){
+        initialized = false;
+        energy_func = NULL;
+        arg_names = NULL;
+    }
+
+    bool initialize(json gel_block){
+
+        set<string> invariants, params;
+        int iter;
+        char **names;
+
+        if(gel_block.contains("free_energy")){
+            if(gel_block["free_energy"].is_string()) {
+                string expr_string = gel_block["free_energy"].get<string>();
+                //Attempt to parse the free energy expression and create a
+                //representation of a mathematical equation
+                energy_func = evaluator_create((char *) expr_string.c_str());
+                if(! energy_func){
+                    cerr << "The function could not be parsed.\n";
+                    return false;
+                }
+            }
+            else{
+                cerr << "The free energy was not specified.\n";
+                return false;
+            }
+        }
+        else {
+            cerr << "Missing required gel field: free energy\n";
+            return false;
+        }
+
+        //Enumerate any parameters in the model other than the fundamental
+        //invariants, and make sure they are specified
+        evaluator_get_variables(energy_func, &names, &count);
+
+        for(iter = 0; iter < count; iter ++){
+            if(!strcmp(names[iter], "I1") || !strcmp(names[iter], "I2") || !strcmp(names[iter], "J")){
+                invariants.emplace(string(names[iter]));
+            }
+            else params.emplace(string(names[iter]));
+        }
+
+        iter = 0;
+        for(string param : params){
+            if(gel_block.contains(param)){
+                if(gel_block[param].is_number_float()){
+                    param_values.push_back(gel_block[param].get<double>());
+                }
+                else {
+                    cerr << "Invalid parameter type\n";
+                    evaluator_destroy(energy_func);
+                    return false;
+                }
+            }
+            else {
+                    cerr << "Missing gel parameter: " << param << endl;
+                    evaluator_destroy(energy_func);
+                    return false;
+            }
+            iter ++;
+        }
+
+        arg_names = (char **) malloc(sizeof(char *) * count);
+        iter = 0;
+        for(string next_inv : invariants){
+            //Add a record of the invariant to the argument list
+            arg_names[iter] = (char *) malloc(sizeof(char)*(next_inv.length()+1));
+            strcpy(arg_names[iter], next_inv.c_str());
+
+            //Find the derivative of the free energy density w.r.t. to the
+            //current invariant
+            energy_derivatives.push_back(evaluator_derivative(energy_func, (char *) next_inv.c_str()));
+
+            //Add function pointers for computing the invariant itself and
+            //the associated contribution to the first Piola-Kirchoff stress
+            //tensor
+            if(next_inv == "I1"){
+                inv_funcs.push_back(compute_i1);
+                pk_funcs.push_back(pk_i1_contribution);
+            }
+            else if(next_inv == "I2"){
+                inv_funcs.push_back(compute_i2);
+                pk_funcs.push_back(pk_i2_contribution);
+            }
+            else{
+                inv_funcs.push_back(compute_j);
+                pk_funcs.push_back(pk_j_contribution);
+            }
+
+            iter ++;
+        }
+        for(string next_par : params){
+            arg_names[iter] = (char *) malloc(sizeof(char)*(next_par.length()+1));
+            strcpy(arg_names[iter], next_par.c_str());
+            iter ++;
+        }
+
+        initialized = true;
+        return initialized;
+    }
+
+    //Free memory allocated in initializing gel model fields
+    void clear(){
+
+        int iter;
+
+        if(! initialized) return;
+
+        evaluator_destroy(energy_func);
+        for(iter = 0; iter < energy_derivatives.size(); iter ++){
+            evaluator_destroy(energy_derivatives[iter]);
+        }
+
+        for(iter = 0; iter < count; iter ++){
+            free(arg_names[iter]);
+            free(arg_names);
+        }
+
+        param_values.clear();
+
+        initialized = false;
+        energy_func = NULL;
+        arg_names = NULL;
+    }
+
+    //Argument count
+    int count;
+
+    //Record of whether or not the structure has been successfully
+    //initialized
+    bool initialized;
+
+    //Free energy density
+    void *energy_func;
+    
+    //Derivatives of the energy density w.r.t. principle invariants
+    vector<void *> energy_derivatives;
+
+    //Function pointers to compute each required principle invariant
+    vector<double(*)(double def_grad[9])> inv_funcs;
+
+    //Function pointers to compute components of the first Piola-Kirchoff stress
+    //tensor
+    vector<void(*)(double e_deriv, double def_grad[9], double pk_stress[9])> pk_funcs;
+
+    //Names of arguments to the energy density function and its derivatives
+    //and model parameter values
+    char **arg_names;
+    vector<double> param_values;
+};
+
 //Data structre to hold information pertaining structural relaxation
 struct NetworkMeshData {
 
@@ -35,11 +210,42 @@ struct NetworkMeshData {
 
     NetworkMeshData(nmc_type my_type) : type(my_type) {}
 
+    //If the network is not lattice based and has bond of varying length,
+    //different stretching and bending constants will be needed, in general,
+    //for different edges and hinges. Edges and triples should be formed
+    //and edge lengths computed before these functions are invoked.
+    void compute_stretching_constants(){
+
+        for(int iter = 0; iter < edges.size(); iter ++){
+            stretching_constants.push_back(ks / lengths[iter]);
+        }
+    }
+
+    void compute_bending_constants(){
+        int trip_iter, idx1, idx2, idx3;
+        Vec3D p1, p2, p3;
+
+        for(trip_iter = 0; trip_iter < triples.size(); trip_iter += 3){
+            assign(p1, points, triples[trip_iter]);
+            assign(p2, points, triples[trip_iter+1]);
+            assign(p3, points, triples[trip_iter+2]);
+            bending_constants.push_back(2*kb/(distance(p1,p2)+distance(p2,p3)));
+        }
+    }
+
     //Fields commmon to all use cases
+
+    //Geometrical and topological data
     vector<double> bounds, points, lengths, angles, inv_mats, volumes;
     vector<int> edges, triples, tetrahedra;
+
+    //Constrained points that should not be allowed to relax
     unordered_set<int> bottom, top;
     nmc_type type;
+
+    //Information for calculating the deformation energy and forces
+    double ks, kb;
+    GelModel gmod;
 
     //Fields needed for disjoint network-mesh complexes
     //These are ignored if the network vertices are a subset of the mesh
@@ -111,28 +317,24 @@ double parallel_fiber_bending_energy(vector<double> points, vector<int> triples,
 
 double parallel_fiber_bending_energy_disjoint(vector<double> points, vector<int> triples,vector<double> angles, vector<double> constants);
 
-void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, double g, double excess_osm, double kt_o_omega, double chi, vector<double> &forces, int start, int end);
+void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod, vector<double> &forces, int start, int end);
 
-void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi, vector<double> &forces, int start, int end);
+void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod, vector<double> &forces, int start, int end);
 
-double calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, double g, double excess_osm, double kt_o_omega, double chi);
+double calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod);
 
-double calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi);
+double calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod);
 
-double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, double g, double excess_osm, double kt_o_omega, double chi);
+double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod);
 
-double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi);
+double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod);
 
-void compute_forces_unified(NetworkMeshData &nmd, vector<double> params, vector<double> &forces);
+void compute_forces_unified(NetworkMeshData &nmd, vector<double> &forces);
 
-void compute_forces_disjoint(NetworkMeshData &nmd, vector<double> params, vector<double> &forces);
+void compute_forces_disjoint(NetworkMeshData &nmd, vector<double> &forces);
 
-void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> params, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
+void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
 
-void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> mech_params, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
-
-void compute_stretching_constants(NetworkMeshData &nmd, double ks);
-
-void compute_bending_constants(NetworkMeshData &nmd, double kb);
+void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
 
 #endif

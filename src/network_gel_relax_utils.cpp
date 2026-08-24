@@ -799,22 +799,103 @@ double parallel_fiber_bending_energy_disjoint(vector<double> points, vector<int>
     return sum_reduce(&energies[0], &energies[0]+energies.size(), 0.);
 }
 
+//Compute invariant I1 of the right Cauchy-Green deformation tensor
+double compute_i1(double def_grad[9]){
+
+    double i1 = def_grad[0]*def_grad[0]+def_grad[1]*def_grad[1] + def_grad[2]*def_grad[2];
+    i1 += def_grad[3]*def_grad[3]+def_grad[4]*def_grad[4]+def_grad[5]*def_grad[5];
+    i1 += def_grad[6]*def_grad[6]+def_grad[7]*def_grad[7]+def_grad[8]*def_grad[8];
+    return i1;
+}
+
+//Compute invariant I1 of the right Cauchy-Green deformation tensor
+double compute_i2(double def_grad[9]){
+
+    double square_of_trace, trace_of_square, c[9], c_squared[9];
+
+    //Compute the right Cauchy-Green deformation tensor and its square
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, 3, 3, 3, 1., def_grad, 3, def_grad, 3, 0, c, 3);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, 3, 3, 3, 1., c, 3, c, 3, 0, c_squared, 3);
+
+    square_of_trace = c[0] + c[4] + c[8];
+    square_of_trace *= square_of_trace;
+    trace_of_square = c_squared[0] + c_squared[4] + c_squared[8];
+
+    return (square_of_trace - trace_of_square) / 2.;
+}
+
+//Compute the invariant J (relative dilation) of the right Cauchy-Green
+//deformation tensor
+double compute_j(double def_grad[9]){
+
+    double j = def_grad[0]*(def_grad[4]*def_grad[8]-def_grad[5]*def_grad[7]);
+    j += def_grad[1]*(def_grad[5]*def_grad[6]-def_grad[3]*def_grad[8]);
+    j += def_grad[2]*(def_grad[3]*def_grad[7]-def_grad[4]*def_grad[6]);
+    return j;
+}
+
+//Compute the contribution to the first Piola-Kirchoff stress associated with
+//the invariant I1
+void pk_i1_contribution(double e_derivative, double def_grad[9], double pk_stress[9]){
+
+    for(int iter = 0; iter < 9; iter ++){
+        pk_stress[iter] -= 2*e_derivative*def_grad[iter];
+    }
+}
+
+//Compute the contribution to the first Piola-Kirchoff stress associated with
+//the invariant I2
+void pk_i2_contribution(double e_derivative, double def_grad[9], double pk_stress[9]){
+
+    int iter;
+    double trace_c, c[9], fc[9];
+
+    //Compute the right Cauchy-Green deformation tensor and multiply it from
+    //the left by the deformation gradient tensor
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, 3, 3, 3, 1., def_grad, 3, def_grad, 3, 0, c, 3);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, 3, 3, 3, 1., def_grad, 3, c, 3, 0, fc, 3);
+    trace_c = c[0] + c[4] + c[8];
+
+    for(iter = 0; iter < 9; iter ++){
+        pk_stress[iter] += 2*e_derivative*(fc[iter] - trace_c*def_grad[iter]);
+    }
+}
+
+//Compute the contribution to the first Piola-Kirchoff stress associated with
+//the invariant J (the relative dilation)
+void pk_j_contribution(double e_derivative, double def_grad[9], double pk_stress[9]){
+
+    pk_stress[0] -= e_derivative*(def_grad[4]*def_grad[8]- def_grad[5]*def_grad[7]);
+    pk_stress[1] -= e_derivative*(def_grad[5]*def_grad[6] - def_grad[3]*def_grad[8]);
+    pk_stress[2] -= e_derivative*(def_grad[3]*def_grad[7] - def_grad[4]*def_grad[6]);
+    pk_stress[3] -= e_derivative*(def_grad[2]*def_grad[7] - def_grad[1]*def_grad[8]);
+    pk_stress[4] -= e_derivative*(def_grad[0]*def_grad[8] - def_grad[2]*def_grad[6]);
+    pk_stress[5] -= e_derivative*(def_grad[1]*def_grad[6] - def_grad[0]*def_grad[7]);
+    pk_stress[6] -= e_derivative*(def_grad[1]*def_grad[5] - def_grad[2]*def_grad[4]);
+    pk_stress[7] -= e_derivative*(def_grad[2]*def_grad[3] - def_grad[0]*def_grad[5]);
+    pk_stress[8] -= e_derivative*(def_grad[0]*def_grad[4] - def_grad[1]*def_grad[3]);
+}
+
 //Find gel restoring forces in a serial manner.
-void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, double g, double excess_osm, double kt_o_omega, double chi, vector<double> &forces, int start, int end){
+void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod, vector<double> &forces, int start, int end){
 
     //Components of the deformation gradient tensor, and derivatives of the
     //gel elastic energy with respect to the deformation gradient tensor
     //components.
-    double f11, f12, f13, f21, f22, f23, f31, f32, f33, de_df11, de_df12;
-    double de_df13, de_df21, de_df22, de_df23, de_df31, de_df32, de_df33;
+    double def_grad[9], pk_stress[9], e_derivative;
+    vector<double> arguments;
 
     //Determinant, trace of the deformation gradient tensor multiplied by its
     //transpose, and coefficients multiplying deformation gradient tensor
     //components to calculate forces
-    double det, sq_sum, coeff1, coeff2;
-    int idx1, idx2, idx3, idx4;
+    int iter, idx1, idx2, idx3, idx4;
 
     vector<double> inv_mat;
+
+    for(int iter = 0; iter < gmod.inv_funcs.size(); iter ++){
+        arguments.push_back(0);
+    }
+    arguments.insert(arguments.end(), gmod.param_values.begin(), gmod.param_values.end());
 
     for(int tet_idx = start; tet_idx != end; tet_idx ++){
 
@@ -829,70 +910,73 @@ void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_m
 	    inv_mat.assign(inv_mats.begin()+12*tet_idx, inv_mats.begin()+12*(tet_idx+1));
 
         //Find the components of the deformation gradient tensor
-        f11 = pts[idx1*3]*inv_mat[0] + pts[idx2*3]*inv_mat[3] + pts[idx3*3]*inv_mat[6] + pts[idx4*3]*inv_mat[9];
-        f12 = pts[idx1*3]*inv_mat[1] + pts[idx2*3]*inv_mat[4] + pts[idx3*3]*inv_mat[7] + pts[idx4*3]*inv_mat[10];
-        f13 = pts[idx1*3]*inv_mat[2] + pts[idx2*3]*inv_mat[5] + pts[idx3*3]*inv_mat[8] + pts[idx4*3]*inv_mat[11];
+        def_grad[0] = pts[idx1*3]*inv_mat[0] + pts[idx2*3]*inv_mat[3] + pts[idx3*3]*inv_mat[6] + pts[idx4*3]*inv_mat[9];
+        def_grad[1] = pts[idx1*3]*inv_mat[1] + pts[idx2*3]*inv_mat[4] + pts[idx3*3]*inv_mat[7] + pts[idx4*3]*inv_mat[10];
+        def_grad[2] = pts[idx1*3]*inv_mat[2] + pts[idx2*3]*inv_mat[5] + pts[idx3*3]*inv_mat[8] + pts[idx4*3]*inv_mat[11];
 
-        f21 = pts[idx1*3+1]*inv_mat[0] + pts[idx2*3+1]*inv_mat[3] + pts[idx3*3+1]*inv_mat[6] + pts[idx4*3+1]*inv_mat[9];
-        f22 = pts[idx1*3+1]*inv_mat[1] + pts[idx2*3+1]*inv_mat[4] + pts[idx3*3+1]*inv_mat[7] + pts[idx4*3+1]*inv_mat[10];
-        f23 = pts[idx1*3+1]*inv_mat[2] + pts[idx2*3+1]*inv_mat[5] + pts[idx3*3+1]*inv_mat[8] + pts[idx4*3+1]*inv_mat[11];
+        def_grad[3] = pts[idx1*3+1]*inv_mat[0] + pts[idx2*3+1]*inv_mat[3] + pts[idx3*3+1]*inv_mat[6] + pts[idx4*3+1]*inv_mat[9];
+        def_grad[4] = pts[idx1*3+1]*inv_mat[1] + pts[idx2*3+1]*inv_mat[4] + pts[idx3*3+1]*inv_mat[7] + pts[idx4*3+1]*inv_mat[10];
+        def_grad[5] = pts[idx1*3+1]*inv_mat[2] + pts[idx2*3+1]*inv_mat[5] + pts[idx3*3+1]*inv_mat[8] + pts[idx4*3+1]*inv_mat[11];
 
-        f31 = pts[idx1*3+2]*inv_mat[0] + pts[idx2*3+2]*inv_mat[3] + pts[idx3*3+2]*inv_mat[6] + pts[idx4*3+2]*inv_mat[9];
-        f32 = pts[idx1*3+2]*inv_mat[1] + pts[idx2*3+2]*inv_mat[4] + pts[idx3*3+2]*inv_mat[7] + pts[idx4*3+2]*inv_mat[10];
-        f33 = pts[idx1*3+2]*inv_mat[2] + pts[idx2*3+2]*inv_mat[5] + pts[idx3*3+2]*inv_mat[8] + pts[idx4*3+2]*inv_mat[11];
+        def_grad[6] = pts[idx1*3+2]*inv_mat[0] + pts[idx2*3+2]*inv_mat[3] + pts[idx3*3+2]*inv_mat[6] + pts[idx4*3+2]*inv_mat[9];
+        def_grad[7] = pts[idx1*3+2]*inv_mat[1] + pts[idx2*3+2]*inv_mat[4] + pts[idx3*3+2]*inv_mat[7] + pts[idx4*3+2]*inv_mat[10];
+        def_grad[8] = pts[idx1*3+2]*inv_mat[2] + pts[idx2*3+2]*inv_mat[5] + pts[idx3*3+2]*inv_mat[8] + pts[idx4*3+2]*inv_mat[11];
 
-        //Find derivatives of the gel elastic energy with respect to the 
-	    //components of the deformation gradient tensor.
-        det = f11*(f22*f33-f23*f32) + f12*(f23*f31-f21*f33) +f13*(f21*f32-f22*f31);
-        sq_sum = f11*f11 + f12*f12 + f13*f13 + f21*f21 + f22*f22 + f23*f23;
-        sq_sum += f31*f31 + f32*f32 + f33*f33;
-        coeff1 = -g*volumes[tet_idx];
-        coeff2 = volumes[tet_idx] * (g*(1 + excess_osm) / det - kt_o_omega * (log((det - 1) / det) + (det+chi)/(det*det)));
+        for(iter = 0; iter < 9; iter ++) pk_stress[iter] = 0.;
 
-        de_df11 = coeff1*f11 + coeff2*(f22*f33 - f23*f32);
-        de_df12 = coeff1*f12 + coeff2*(f23*f31 - f21*f33);
-        de_df13 = coeff1*f13 + coeff2*(f21*f32 - f22*f31);
-        de_df21 = coeff1*f21 + coeff2*(f13*f32 - f12*f33);
-        de_df22 = coeff1*f22 + coeff2*(f11*f33 - f13*f31);
-        de_df23 = coeff1*f23 + coeff2*(f12*f31 - f11*f32);
-        de_df31 = coeff1*f31 + coeff2*(f12*f23 - f13*f22);
-        de_df32 = coeff1*f32 + coeff2*(f13*f21 - f11*f23);
-        de_df33 = coeff1*f33 + coeff2*(f11*f22 - f12*f21);
+        //Find the principal invariants and the derivatives of the gel elastic 
+        //energy with respect to the components of the deformation gradient
+        //tensor, then use these to compute the nominal stress tensor
+        for(iter = 0; iter < gmod.inv_funcs.size(); iter ++){
+            arguments[iter] = gmod.inv_funcs[iter](def_grad);
+        }
+        for(iter = 0; iter < gmod.energy_derivatives.size(); iter ++){
+            e_derivative = evaluator_evaluate(gmod.energy_derivatives[iter], gmod.count, gmod.arg_names, &arguments[0]);
+            gmod.pk_funcs[iter](e_derivative, def_grad, pk_stress);
+        }
+
+        //Scale the PK stress by the volume
+        for(iter = 0; iter < 9; iter ++) pk_stress[iter] *= volumes[tet_idx];
 
         //Find forces on each vertex using the chain rule
-        forces[idx1*3] += de_df11*inv_mat[0] + de_df12*inv_mat[1] + de_df13*inv_mat[2];
-        forces[idx1*3+1] += de_df21*inv_mat[0] + de_df22*inv_mat[1] + de_df23*inv_mat[2];
-        forces[idx1*3+2] += de_df31*inv_mat[0] + de_df32*inv_mat[1] + de_df33*inv_mat[2];
+        forces[idx1*3] += pk_stress[0]*inv_mat[0] + pk_stress[1]*inv_mat[1] + pk_stress[2]*inv_mat[2];
+        forces[idx1*3+1] += pk_stress[3]*inv_mat[0] + pk_stress[4]*inv_mat[1] + pk_stress[5]*inv_mat[2];
+        forces[idx1*3+2] += pk_stress[6]*inv_mat[0] + pk_stress[7]*inv_mat[1] + pk_stress[8]*inv_mat[2];
 
-        forces[idx2*3] += de_df11*inv_mat[3] + de_df12*inv_mat[4] + de_df13*inv_mat[5];
-        forces[idx2*3+1] += de_df21*inv_mat[3] + de_df22*inv_mat[4] + de_df23*inv_mat[5];
-        forces[idx2*3+2] += de_df31*inv_mat[3] + de_df32*inv_mat[4] + de_df33*inv_mat[5];
+        forces[idx2*3] += pk_stress[0]*inv_mat[3] + pk_stress[1]*inv_mat[4] + pk_stress[2]*inv_mat[5];
+        forces[idx2*3+1] += pk_stress[3]*inv_mat[3] + pk_stress[4]*inv_mat[4] + pk_stress[5]*inv_mat[5];
+        forces[idx2*3+2] += pk_stress[6]*inv_mat[3] + pk_stress[7]*inv_mat[4] + pk_stress[8]*inv_mat[5];
 
-        forces[idx3*3] += de_df11*inv_mat[6] + de_df12*inv_mat[7] + de_df13*inv_mat[8];
-        forces[idx3*3+1] += de_df21*inv_mat[6] + de_df22*inv_mat[7] + de_df23*inv_mat[8];
-        forces[idx3*3+2] += de_df31*inv_mat[6] + de_df32*inv_mat[7] + de_df33*inv_mat[8];
+        forces[idx3*3] += pk_stress[0]*inv_mat[6] + pk_stress[1]*inv_mat[7] + pk_stress[2]*inv_mat[8];
+        forces[idx3*3+1] += pk_stress[3]*inv_mat[6] + pk_stress[4]*inv_mat[7] + pk_stress[5]*inv_mat[8];
+        forces[idx3*3+2] += pk_stress[6]*inv_mat[6] + pk_stress[7]*inv_mat[7] + pk_stress[8]*inv_mat[8];
 
-        forces[idx4*3] += de_df11*inv_mat[9] + de_df12*inv_mat[10] + de_df13*inv_mat[11];
-        forces[idx4*3+1] += de_df21*inv_mat[9] + de_df22*inv_mat[10] + de_df23*inv_mat[11];
-        forces[idx4*3+2] += de_df31*inv_mat[9] + de_df32*inv_mat[10] + de_df33*inv_mat[11];
+        forces[idx4*3] += pk_stress[0]*inv_mat[9] + pk_stress[1]*inv_mat[10] + pk_stress[2]*inv_mat[11];
+        forces[idx4*3+1] += pk_stress[3]*inv_mat[9] + pk_stress[4]*inv_mat[10] + pk_stress[5]*inv_mat[11];
+        forces[idx4*3+2] += pk_stress[6]*inv_mat[9] + pk_stress[7]*inv_mat[10] + pk_stress[8]*inv_mat[11];
     }
 }
 
-void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi, vector<double> &forces, int start, int end){
+void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod, vector<double> &forces, int start, int end){
 
     //Components of the affine transformation matrix, derivatives of the
     //gel elastic energy with respect to the deformation gradient tensor
     //components, and an augmented coordinate of a network vertex
-    double de_df11, de_df12, de_df13, de_df21, de_df22, de_df23, de_df31;
-    double de_df32, de_df33, ref_coord[4], disp_coord[4], x[16], a[16];
+    double def_grad[9], pk_stress[9], ref_coord[4], disp_coord[4], x[16], a[16];
+    double e_derivative;
+    vector<double> arguments;
 
     //Determinant, trace of the deformation gradient tensor multiplied by its
     //transpose, and coefficients multiplying deformation gradient tensor
     //components to calculate forces
-    double det, sq_sum, coeff1, coeff2;
     int idx1, idx2, idx3, idx4, i;
 
     vector<double> inv_mat;
+
+    for(i = 0; i < gmod.inv_funcs.size(); i ++){
+        arguments.push_back(0);
+    }
+    arguments.insert(arguments.end(), gmod.param_values.begin(), gmod.param_values.end());
 
     ref_coord[3] = 1.;
     for(i = 12; i < 16; i++) x[i] = 1.;
@@ -924,56 +1008,64 @@ void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<dou
             cblas_dcopy(3, disp_coord, 1, &pts[3*contained_vertices[i]], 1);
         }
 
+        //Copy elements from the full affine deformation to the more
+        //compact deformation gradient tensor
+        for(i = 0; i < 3; i ++){
+            cblas_dcopy(3, a + 4*i, 1, def_grad + 3*i, 1);
+        }
+
+        for(i = 0; i < 9; i ++) pk_stress[i] = 0.;
+
         //Find derivatives of the gel elastic energy with respect to the 
 	    //components of the deformation gradient tensor.
-        det = a[0]*(a[5]*a[10]-a[6]*a[9]) + a[1]*(a[6]*a[8]-a[4]*a[10]) + a[2]*(a[4]*a[9]-a[5]*a[8]);
-        sq_sum = a[0]*a[0] + a[1]*a[1] + a[2]*a[2] + a[4]*a[4] + a[5]*a[5];
-        sq_sum += a[6]*a[6] + a[8]*a[8] + a[9]*a[9] + a[10]*a[10];
-        coeff1 = -g*volumes[tet_idx];
-        coeff2 = volumes[tet_idx] * (g*(1 + excess_osm) / det - kt_o_omega * (log((det - 1) / det) + (det+chi)/(det*det)));
+        for(i = 0; i < gmod.inv_funcs.size(); i ++){
+            arguments[i] = gmod.inv_funcs[i](def_grad);
+        }
+        for(i = 0; i < gmod.energy_derivatives.size(); i ++){
+            e_derivative = evaluator_evaluate(gmod.energy_derivatives[i], gmod.count, gmod.arg_names, &arguments[0]);
+            gmod.pk_funcs[i](e_derivative, def_grad, pk_stress);
+        }
 
-        de_df11 = coeff1*a[0] + coeff2*(a[5]*a[10] - a[6]*a[9]);
-        de_df12 = coeff1*a[1] + coeff2*(a[6]*a[8] - a[4]*a[10]);
-        de_df13 = coeff1*a[2] + coeff2*(a[4]*a[9] - a[5]*a[8]);
-        de_df21 = coeff1*a[4] + coeff2*(a[2]*a[9] - a[1]*a[19]);
-        de_df22 = coeff1*a[5] + coeff2*(a[0]*a[10] - a[2]*a[8]);
-        de_df23 = coeff1*a[6] + coeff2*(a[1]*a[8] - a[0]*a[9]);
-        de_df31 = coeff1*a[8] + coeff2*(a[1]*a[6] - a[2]*a[5]);
-        de_df32 = coeff1*a[9] + coeff2*(a[2]*a[4] - a[0]*a[6]);
-        de_df33 = coeff1*a[10] + coeff2*(a[0]*a[5] - a[1]*a[4]);
+        //Scale the PK stress by the volume
+        for(i = 0; i < 9; i ++) pk_stress[i] *= volumes[tet_idx];
 
         //Find forces on each vertex using the chain rule
-        forces[idx1*3] += de_df11*inv_mat[0] + de_df12*inv_mat[1] + de_df13*inv_mat[2];
-        forces[idx1*3+1] += de_df21*inv_mat[0] + de_df22*inv_mat[1] + de_df23*inv_mat[2];
-        forces[idx1*3+2] += de_df31*inv_mat[0] + de_df32*inv_mat[1] + de_df33*inv_mat[2];
+        forces[idx1*3] += pk_stress[0]*inv_mat[0] + pk_stress[1]*inv_mat[1] + pk_stress[2]*inv_mat[2];
+        forces[idx1*3+1] += pk_stress[3]*inv_mat[0] + pk_stress[4]*inv_mat[1] + pk_stress[5]*inv_mat[2];
+        forces[idx1*3+2] += pk_stress[6]*inv_mat[0] + pk_stress[7]*inv_mat[1] + pk_stress[8]*inv_mat[2];
 
-        forces[idx2*3] += de_df11*inv_mat[4] + de_df12*inv_mat[5] + de_df13*inv_mat[6];
-        forces[idx2*3+1] += de_df21*inv_mat[4] + de_df22*inv_mat[5] + de_df23*inv_mat[6];
-        forces[idx2*3+2] += de_df31*inv_mat[4] + de_df32*inv_mat[5] + de_df33*inv_mat[6];
+        forces[idx2*3] += pk_stress[0]*inv_mat[4] + pk_stress[1]*inv_mat[5] + pk_stress[2]*inv_mat[6];
+        forces[idx2*3+1] += pk_stress[3]*inv_mat[4] + pk_stress[4]*inv_mat[5] + pk_stress[5]*inv_mat[6];
+        forces[idx2*3+2] += pk_stress[6]*inv_mat[4] + pk_stress[7]*inv_mat[5] + pk_stress[8]*inv_mat[6];
 
-        forces[idx3*3] += de_df11*inv_mat[8] + de_df12*inv_mat[9] + de_df13*inv_mat[10];
-        forces[idx3*3+1] += de_df21*inv_mat[8] + de_df22*inv_mat[9] + de_df23*inv_mat[10];
-        forces[idx3*3+2] += de_df31*inv_mat[8] + de_df32*inv_mat[9] + de_df33*inv_mat[10];
+        forces[idx3*3] += pk_stress[0]*inv_mat[8] + pk_stress[1]*inv_mat[9] + pk_stress[2]*inv_mat[10];
+        forces[idx3*3+1] += pk_stress[3]*inv_mat[8] + pk_stress[4]*inv_mat[9] + pk_stress[5]*inv_mat[10];
+        forces[idx3*3+2] += pk_stress[6]*inv_mat[8] + pk_stress[7]*inv_mat[9] + pk_stress[8]*inv_mat[10];
 
-        forces[idx4*3] += de_df11*inv_mat[12] + de_df12*inv_mat[13] + de_df13*inv_mat[14];
-        forces[idx4*3+1] += de_df21*inv_mat[12] + de_df22*inv_mat[13] + de_df23*inv_mat[14];
-        forces[idx4*3+2] += de_df31*inv_mat[12] + de_df32*inv_mat[13] + de_df33*inv_mat[14];
+        forces[idx4*3] += pk_stress[0]*inv_mat[12] + pk_stress[1]*inv_mat[13] + pk_stress[2]*inv_mat[14];
+        forces[idx4*3+1] += pk_stress[3]*inv_mat[12] + pk_stress[4]*inv_mat[13] + pk_stress[5]*inv_mat[14];
+        forces[idx4*3+2] += pk_stress[6]*inv_mat[12] + pk_stress[7]*inv_mat[13] + pk_stress[8]*inv_mat[14];
     }
 }
 
 //Find the deformation energies of gel elements in a serial manner.
-double calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, double g, double excess_osm, double kt_o_omega, double chi){
+double calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod){
 
-    //Components of the deformation gradient tensor
-    double f11, f12, f13, f21, f22, f23, f31, f32, f33;
+    //Components of the deformation gradient tensor and deformation energy
+    double def_grad[9], energy = 0;
+    //Arguments to the constitutive model of the gel deformation energy and
+    //components of the matrix used to compute the deformation gradient tensor
+    vector<double> arguments, inv_mat;
 
     //Determinant, trace of the deformation gradient tensor multiplied by its
     //transpose, and coefficients multiplying deformation gradient tensor
     //components to calculate forces
-    double det, sq_sum, energy = 0;
-    int idx1, idx2, idx3, idx4;
+    int idx1, idx2, idx3, idx4, iter;
 
-    vector<double> inv_mat;
+    for(iter = 0; iter < gmod.inv_funcs.size(); iter ++){
+        arguments.push_back(0);
+    }
+    arguments.insert(arguments.end(), gmod.param_values.begin(), gmod.param_values.end());
 
     for(int tet_idx = 0; tet_idx < tetrahedra.size() / 4; tet_idx ++){
 
@@ -988,49 +1080,47 @@ double calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double
 	    inv_mat.assign(inv_mats.begin()+12*tet_idx, inv_mats.begin()+12*(tet_idx+1));
 
         //Find the components of the deformation gradient tensor
-        f11 = pts[idx1*3]*inv_mat[0] + pts[idx2*3]*inv_mat[3] + pts[idx3*3]*inv_mat[6] + pts[idx4*3]*inv_mat[9];
-        f12 = pts[idx1*3]*inv_mat[1] + pts[idx2*3]*inv_mat[4] + pts[idx3*3]*inv_mat[7] + pts[idx4*3]*inv_mat[10];
-        f13 = pts[idx1*3]*inv_mat[2] + pts[idx2*3]*inv_mat[5] + pts[idx3*3]*inv_mat[8] + pts[idx4*3]*inv_mat[11];
+        def_grad[0] = pts[idx1*3]*inv_mat[0] + pts[idx2*3]*inv_mat[3] + pts[idx3*3]*inv_mat[6] + pts[idx4*3]*inv_mat[9];
+        def_grad[1] = pts[idx1*3]*inv_mat[1] + pts[idx2*3]*inv_mat[4] + pts[idx3*3]*inv_mat[7] + pts[idx4*3]*inv_mat[10];
+        def_grad[2] = pts[idx1*3]*inv_mat[2] + pts[idx2*3]*inv_mat[5] + pts[idx3*3]*inv_mat[8] + pts[idx4*3]*inv_mat[11];
 
-        f21 = pts[idx1*3+1]*inv_mat[0] + pts[idx2*3+1]*inv_mat[3] + pts[idx3*3+1]*inv_mat[6] + pts[idx4*3+1]*inv_mat[9];
-        f22 = pts[idx1*3+1]*inv_mat[1] + pts[idx2*3+1]*inv_mat[4] + pts[idx3*3+1]*inv_mat[7] + pts[idx4*3+1]*inv_mat[10];
-        f23 = pts[idx1*3+1]*inv_mat[2] + pts[idx2*3+1]*inv_mat[5] + pts[idx3*3+1]*inv_mat[8] + pts[idx4*3+1]*inv_mat[11];
+        def_grad[3] = pts[idx1*3+1]*inv_mat[0] + pts[idx2*3+1]*inv_mat[3] + pts[idx3*3+1]*inv_mat[6] + pts[idx4*3+1]*inv_mat[9];
+        def_grad[4] = pts[idx1*3+1]*inv_mat[1] + pts[idx2*3+1]*inv_mat[4] + pts[idx3*3+1]*inv_mat[7] + pts[idx4*3+1]*inv_mat[10];
+        def_grad[5] = pts[idx1*3+1]*inv_mat[2] + pts[idx2*3+1]*inv_mat[5] + pts[idx3*3+1]*inv_mat[8] + pts[idx4*3+1]*inv_mat[11];
 
-        f31 = pts[idx1*3+2]*inv_mat[0] + pts[idx2*3+2]*inv_mat[3] + pts[idx3*3+2]*inv_mat[6] + pts[idx4*3+2]*inv_mat[9];
-        f32 = pts[idx1*3+2]*inv_mat[1] + pts[idx2*3+2]*inv_mat[4] + pts[idx3*3+2]*inv_mat[7] + pts[idx4*3+2]*inv_mat[10];
-        f33 = pts[idx1*3+2]*inv_mat[2] + pts[idx2*3+2]*inv_mat[5] + pts[idx3*3+2]*inv_mat[8] + pts[idx4*3+2]*inv_mat[11];
+        def_grad[6] = pts[idx1*3+2]*inv_mat[0] + pts[idx2*3+2]*inv_mat[3] + pts[idx3*3+2]*inv_mat[6] + pts[idx4*3+2]*inv_mat[9];
+        def_grad[7] = pts[idx1*3+2]*inv_mat[1] + pts[idx2*3+2]*inv_mat[4] + pts[idx3*3+2]*inv_mat[7] + pts[idx4*3+2]*inv_mat[10];
+        def_grad[8] = pts[idx1*3+2]*inv_mat[2] + pts[idx2*3+2]*inv_mat[5] + pts[idx3*3+2]*inv_mat[8] + pts[idx4*3+2]*inv_mat[11];
+
+        for(iter = 0; iter < gmod.inv_funcs.size(); iter ++){
+            arguments[iter] = gmod.inv_funcs[iter](def_grad);
+        }
 
         //Find derivatives of the gel elastic energy with respect to the 
 	    //components of the deformation gradient tensor.
-        det = f11*(f22*f33-f23*f32) + f12*(f23*f31-f21*f33) +f13*(f21*f32-f22*f31);
-
-        sq_sum = f11*f11 + f12*f12 + f13*f13 + f21*f21 + f22*f22 + f23*f23;
-        sq_sum += f31*f31 + f32*f32 + f33*f33;
-        energy += volumes[tet_idx] * g * .5 * (sq_sum - 3 - 2*(1 + excess_osm)*log(det));
-        energy += volumes[tet_idx] * kt_o_omega * ((det - 1)*log((det - 1) / det) + chi*(det - 1)/det);
+        energy += volumes[tet_idx] * evaluator_evaluate(gmod.energy_func, gmod.count, gmod.arg_names, &arguments[0]); 
     }
 
     return energy;
 }
 
-double calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi){
+double calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod){
 
     //Components of the affine transformation matrix and an augmented 
     //coordinate of a network vertex
-    double de_df11, de_df12, de_df13, de_df21, de_df22, de_df23, de_df31;
-    double de_df32, de_df33, ref_coord[4], disp_coord[4], x[16], a[16];
+    double ref_coord[4], disp_coord[4], x[16], a[16], def_grad[9], energy = 0;
+    //Arguments to the constitutive model for the gel and a matrix for computing
+    //the affine transformation from the reference to the deformed state
+    vector<double> arguments, inv_mat;
 
     //Determinant, trace of the deformation gradient tensor multiplied by its
     //transpose, and energy
-    double det, sq_sum, energy;
     int idx1, idx2, idx3, idx4, i;
-
-    vector<double> inv_mat;
-
-    energy = 0;
 
     ref_coord[3] = 1.;
     for(i = 12; i < 16; i++) x[i] = 1.;
+
+    for(i = 0; i < gmod.inv_funcs.size(); i ++) arguments.push_back(0);
 
     for(int tet_idx = 0; tet_idx < tetrahedra.size()/4; tet_idx ++){
 
@@ -1040,7 +1130,7 @@ double calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vec
         idx3 = tetrahedra[tet_idx*4+2];
         idx4 = tetrahedra[tet_idx*4+3];
 
-        //Compute the matrix for computing an affine transformation for the
+        //Obtain the matrix for computing an affine transformation for the
         //current tetrahedral cell
 	    inv_mat.assign(inv_mats.begin()+16*tet_idx, inv_mats.begin()+16*(tet_idx+1));
 
@@ -1052,41 +1142,41 @@ double calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vec
         }
 
         cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, 4, 4, 4, 1., x, 4, &inv_mat[0], 4, 0, a, 4);
-        
+
+        //Update the positions of network vertices contained within a
+        //given tetrahedron 
         for(i = vertex_ranges[tet_idx]; i < vertex_ranges[tet_idx+1]; i++){
             cblas_dcopy(3, &ref_pts[3*contained_vertices[i]], 1, ref_coord, 1);
             cblas_dgemv(CblasRowMajor, CblasNoTrans, 4, 4, 1., a, 4, ref_coord, 1, 0, disp_coord, 1);
             cblas_dcopy(3, disp_coord, 1, &pts[3*contained_vertices[i]], 1);
         }
 
-        //Find the gel elastic energy of the present mesh cell
-        det = a[0]*(a[5]*a[10]-a[6]*a[9]) + a[1]*(a[6]*a[8]-a[4]*a[10]) + a[2]*(a[4]*a[9]-a[5]*a[8]);
-        sq_sum = a[0]*a[0] + a[1]*a[1] + a[2]*a[2] + a[4]*a[4] + a[5]*a[5];
-        sq_sum += a[6]*a[6] + a[8]*a[8] + a[9]*a[9] + a[10]*a[10];
+        for(i = 0; i < 3; i ++){
+            cblas_dcopy(3, a + 4*i, 1, &def_grad[3*i], 1);
+        }
 
-        energy += volumes[tet_idx] * g * .5 * (sq_sum - 3 - 2*(1 + excess_osm)*log(det));
-        energy += volumes[tet_idx] * kt_o_omega * ((det - 1)*log((det - 1) / det) + chi*(det - 1)/det);
+        for(i = 0; i < gmod.inv_funcs.size(); i ++){
+            arguments[i] = gmod.inv_funcs[i](def_grad);
+        }
+        energy += volumes[tet_idx] * evaluator_evaluate(gmod.energy_func, arguments.size(), gmod.arg_names, &arguments[0]);
     }
 
     return energy;
 }
 
 //Find the deformation energies of gel elements in a parallel manner.
-void gel_energy_worker(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, double g, double excess_osm, double kt_o_omega, double chi, int index, double *energy){
+void gel_energy_worker(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod, int index, double *energy){
 
-    //Components of the deformation gradient tensor, and derivatives of the
-    //gel elastic energy with respect to the deformation gradient tensor
-    //components.
-    double f11, f12, f13, f21, f22, f23, f31, f32, f33, de_df11, de_df12;
-    double de_df13, de_df21, de_df22, de_df23, de_df31, de_df32, de_df33;
+    //Components of the deformation gradient tensor
+    double def_grad[9];
 
     //Determinant, trace of the deformation gradient tensor multiplied by its
     //transpose, and coefficients multiplying deformation gradient tensor
     //components to calculate forces
-    double det, sq_sum;
-    int idx1, idx2, idx3, idx4;
+    //double det, sq_sum;
+    int idx1, idx2, idx3, idx4, iter;
 
-    vector<double> inv_mat;
+    vector<double> inv_mat, arguments;
 
     //Integer indices of the vertices of the tetrahedron
     idx1 = tetrahedra[index*4];
@@ -1099,28 +1189,26 @@ void gel_energy_worker(vector<double> pts, vector<int> tetrahedra, vector<double
     inv_mat.assign(inv_mats.begin()+12*index, inv_mats.begin()+12*(index+1));
 
     //Find the components of the deformation gradient tensor
-    f11 = pts[idx1*3]*inv_mat[0] + pts[idx2*3]*inv_mat[3] + pts[idx3*3]*inv_mat[6] + pts[idx4*3]*inv_mat[9];
-    f12 = pts[idx1*3]*inv_mat[1] + pts[idx2*3]*inv_mat[4] + pts[idx3*3]*inv_mat[7] + pts[idx4*3]*inv_mat[10];
-    f13 = pts[idx1*3]*inv_mat[2] + pts[idx2*3]*inv_mat[5] + pts[idx3*3]*inv_mat[8] + pts[idx4*3]*inv_mat[11];
+    def_grad[0] = pts[idx1*3]*inv_mat[0] + pts[idx2*3]*inv_mat[3] + pts[idx3*3]*inv_mat[6] + pts[idx4*3]*inv_mat[9];
+    def_grad[1] = pts[idx1*3]*inv_mat[1] + pts[idx2*3]*inv_mat[4] + pts[idx3*3]*inv_mat[7] + pts[idx4*3]*inv_mat[10];
+    def_grad[2] = pts[idx1*3]*inv_mat[2] + pts[idx2*3]*inv_mat[5] + pts[idx3*3]*inv_mat[8] + pts[idx4*3]*inv_mat[11];
 
-    f21 = pts[idx1*3+1]*inv_mat[0] + pts[idx2*3+1]*inv_mat[3] + pts[idx3*3+1]*inv_mat[6] + pts[idx4*3+1]*inv_mat[9];
-    f22 = pts[idx1*3+1]*inv_mat[1] + pts[idx2*3+1]*inv_mat[4] + pts[idx3*3+1]*inv_mat[7] + pts[idx4*3+1]*inv_mat[10];
-    f23 = pts[idx1*3+1]*inv_mat[2] + pts[idx2*3+1]*inv_mat[5] + pts[idx3*3+1]*inv_mat[8] + pts[idx4*3+1]*inv_mat[11];
+    def_grad[3] = pts[idx1*3+1]*inv_mat[0] + pts[idx2*3+1]*inv_mat[3] + pts[idx3*3+1]*inv_mat[6] + pts[idx4*3+1]*inv_mat[9];
+    def_grad[4] = pts[idx1*3+1]*inv_mat[1] + pts[idx2*3+1]*inv_mat[4] + pts[idx3*3+1]*inv_mat[7] + pts[idx4*3+1]*inv_mat[10];
+    def_grad[5] = pts[idx1*3+1]*inv_mat[2] + pts[idx2*3+1]*inv_mat[5] + pts[idx3*3+1]*inv_mat[8] + pts[idx4*3+1]*inv_mat[11];
 
-    f31 = pts[idx1*3+2]*inv_mat[0] + pts[idx2*3+2]*inv_mat[3] + pts[idx3*3+2]*inv_mat[6] + pts[idx4*3+2]*inv_mat[9];
-    f32 = pts[idx1*3+2]*inv_mat[1] + pts[idx2*3+2]*inv_mat[4] + pts[idx3*3+2]*inv_mat[7] + pts[idx4*3+2]*inv_mat[10];
-    f33 = pts[idx1*3+2]*inv_mat[2] + pts[idx2*3+2]*inv_mat[5] + pts[idx3*3+2]*inv_mat[8] + pts[idx4*3+2]*inv_mat[11];
+    def_grad[6] = pts[idx1*3+2]*inv_mat[0] + pts[idx2*3+2]*inv_mat[3] + pts[idx3*3+2]*inv_mat[6] + pts[idx4*3+2]*inv_mat[9];
+    def_grad[7] = pts[idx1*3+2]*inv_mat[1] + pts[idx2*3+2]*inv_mat[4] + pts[idx3*3+2]*inv_mat[7] + pts[idx4*3+2]*inv_mat[10];
+    def_grad[8] = pts[idx1*3+2]*inv_mat[2] + pts[idx2*3+2]*inv_mat[5] + pts[idx3*3+2]*inv_mat[8] + pts[idx4*3+2]*inv_mat[11];
 
-    //Find derivatives of the gel elastic energy with respect to the 
-    //components of the deformation gradient tensor.
-    det = f11*(f22*f33-f23*f32) + f12*(f23*f31-f21*f33) +f13*(f21*f32-f22*f31);
-    sq_sum = f11*f11 + f12*f12 + f13*f13 + f21*f21 + f22*f22 + f23*f23;
-    sq_sum += f31*f31 + f32*f32 + f33*f33;
-    *energy = volumes[index] * g * .5 * (sq_sum - 3 - 2*(1 + excess_osm)*log(det));
-    *energy += volumes[index] * kt_o_omega * ((det - 1)*log((det - 1) / det) + chi*(det-1)/det);
+    for(iter = 0; iter < gmod.inv_funcs.size(); iter ++){
+        arguments.push_back(gmod.inv_funcs[iter](def_grad));
+    }
+    arguments.insert(arguments.end(), gmod.param_values.begin(), gmod.param_values.end());
+    *energy += volumes[index] * evaluator_evaluate(gmod.energy_func, gmod.count, gmod.arg_names, &arguments[0]);
 }
 
-double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, double g, double excess_osm, double kt_o_omega, double chi){
+double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod){
 
     vector<double> energies(tetrahedra.size() / 4, 0);
 
@@ -1128,7 +1216,7 @@ double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vect
     tbb::parallel_for(tbb::blocked_range<size_t>(0, tetrahedra.size()/4),
         [&](const tbb::blocked_range<size_t>& r) {
             for(size_t index = r.begin(); index != r.end(); index++){
-                gel_energy_worker(pts, tetrahedra, inv_mats, volumes, g, excess_osm, kt_o_omega, chi, index, &energies[index]);
+               gel_energy_worker(pts, tetrahedra, inv_mats, volumes, gmod, index, &energies[index]);
             }
         }
     );
@@ -1137,19 +1225,19 @@ double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vect
     return sum_reduce(&energies[0], &energies[0]+energies.size(), 0.);
 }
 
-void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi, int tet_idx, double *energy){
+//void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi, int tet_idx, double *energy){
+void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod, int tet_idx, double *energy){
 
     //Components of the affine transformation matrix and an augmented 
     //coordinate of a network vertex
-    double de_df11, de_df12, de_df13, de_df21, de_df22, de_df23, de_df31;
-    double de_df32, de_df33, ref_coord[4], disp_coord[4], x[16], a[16];
+    double ref_coord[4], disp_coord[4], x[16], a[16], def_grad[9];
 
     //Determinant, trace of the deformation gradient tensor multiplied by its
     //transpose, and energy
-    double det, sq_sum;
+    //double det, sq_sum;
     int idx1, idx2, idx3, idx4, i;
 
-    vector<double> inv_mat;
+    vector<double> inv_mat, arguments;
 
     ref_coord[3] = 1.;
     for(i = 12; i < 16; i++) x[i] = 1.;
@@ -1179,15 +1267,17 @@ void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vec
         cblas_dcopy(3, disp_coord, 1, &pts[3*contained_vertices[i]], 1);
     }
 
-    //Find the gel elastic energy of the present mesh cell
-    det = a[0]*(a[5]*a[10]-a[6]*a[9]) + a[1]*(a[6]*a[8]-a[4]*a[10]) + a[2]*(a[4]*a[9]-a[5]*a[8]);
-    sq_sum = a[0]*a[0] + a[1]*a[1] + a[2]*a[2] + a[4]*a[4] + a[5]*a[5];
-    sq_sum += a[6]*a[6] + a[8]*a[8] + a[9]*a[9] + a[10]*a[10];
-    *energy = volumes[tet_idx] * g * .5 * (sq_sum - 3 - 2*(1 + excess_osm)*log(det));
-    *energy += volumes[tet_idx] * kt_o_omega * ((det - 1)*log((det - 1) / det) + chi*(det - 1)/det);
+    //Compute principal invariants and evaluate the gel constitutive model
+    for(i = 0; i < 3; i ++){
+        cblas_dcopy(3, a + 4*i, 1, &def_grad[3*i], 1);
+    }
+    for(i = 0; i < gmod.inv_funcs.size(); i ++){
+        arguments.push_back(gmod.inv_funcs[i](def_grad));
+    }
+    *energy += volumes[tet_idx] * evaluator_evaluate(gmod.energy_func, gmod.count, gmod.arg_names, &arguments[0]);
 }
 
-double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi){
+double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod){
 
     vector<double> energies(tetrahedra.size() / 4, 0);
 
@@ -1195,7 +1285,7 @@ double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrah
     tbb::parallel_for(tbb::blocked_range<size_t>(0, tetrahedra.size()/4),
         [&](const tbb::blocked_range<size_t>& r) {
             for(size_t index = r.begin(); index != r.end(); index++){
-                disjoint_gel_energy_worker(pts, tetrahedra, inv_mats, volumes, ref_pts, vertex_ranges, contained_vertices, g, excess_osm, kt_o_omega, chi, index, &energies[index]);
+                disjoint_gel_energy_worker(pts, tetrahedra, inv_mats, volumes, ref_pts, vertex_ranges, contained_vertices, gmod, index, &energies[index]);
             }
         }
     );
@@ -1206,21 +1296,19 @@ double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrah
 
 //Helper function for computation of restoring forces when the network vertices
 //are a subset of the mesh vertices
-void compute_forces_unified(NetworkMeshData &nmd,  vector<double> mech_params, vector<double> &forces){
+void compute_forces_unified(NetworkMeshData &nmd, vector<double> &forces){
 
     cblas_dscal(forces.size(), 0, &forces[0], 1);
 
-    gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5], forces, 0, nmd.tetrahedra.size() / 4);
+    gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.gmod, forces, 0, nmd.tetrahedra.size() / 4);
 
-    if(mech_params[0] > 0){
-        stretching_forces(nmd.points, nmd.edges, nmd.lengths, mech_params[0], forces, 0, nmd.edges.size()/2);
+    if(nmd.ks > 0){
+        stretching_forces(nmd.points, nmd.edges, nmd.lengths, nmd.ks, forces, 0, nmd.edges.size()/2);
     }
 
-    if(mech_params[1] > 0){
-        bending_forces(nmd.points, nmd.triples, nmd.angles, mech_params[1], forces, 0, nmd.triples.size()/3);
+    if(nmd.kb > 0){
+        bending_forces(nmd.points, nmd.triples, nmd.angles, nmd.kb, forces, 0, nmd.triples.size()/3);
     }
-
-    //gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, gmod, delta, kt_o_omega, chi, forces, 0, nmd.tetrahedra.size() / 4);
 
     for(int next_idx : nmd.bottom){
         forces[3*next_idx] = 0;
@@ -1236,7 +1324,7 @@ void compute_forces_unified(NetworkMeshData &nmd,  vector<double> mech_params, v
 
 //Helper function for computation of restoring forces when the network vertices
 //belong to a set that is disjoint from the mesh vertices
-void compute_forces_disjoint(NetworkMeshData &nmd,  vector<double> mech_params, vector<double> &forces){
+void compute_forces_disjoint(NetworkMeshData &nmd, vector<double> &forces){
 
     cholmod_dense *net_forces, *net_contribution;
     void *net_force_values, *gel_force_values;
@@ -1244,13 +1332,13 @@ void compute_forces_disjoint(NetworkMeshData &nmd,  vector<double> mech_params, 
 
     cblas_dscal(forces.size(), 0, &forces[0], 1);
 
-    gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5], forces, 0, nmd.tetrahedra.size() / 4);
+    gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.gmod, forces, 0, nmd.tetrahedra.size() / 4);
 
-    if(mech_params[0] > 0){
-        stretching_forces(nmd.points, nmd.edges, nmd.lengths, mech_params[0], forces, 0, nmd.edges.size()/2);
+    if(nmd.ks > 0){
+        stretching_forces_disjoint(nmd.points, nmd.edges, nmd.lengths, nmd.stretching_constants, forces, 0, nmd.edges.size() / 2);
     }
 
-    if(mech_params[1] > 0){
+    if(nmd.kb > 0){
         bending_forces_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants, forces, 0, nmd.triples.size()/3);
     }
 
@@ -1279,7 +1367,7 @@ void compute_forces_disjoint(NetworkMeshData &nmd,  vector<double> mech_params, 
 }
 
 //Helper functions to handle parallel force computation
-void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> mech_params, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
+void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
 
     int iter, num_dof;
 
@@ -1304,19 +1392,19 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> mech_p
 
     tbb::task_group g;
 
-    if(mech_params[0] > 0){
+    if(nmd.ks > 0){
         for(iter = 0; iter < stretch_assignments.size() - 1; iter++){
-            g.run([nmd, mech_params, &force_sets, stretch_assignments, iter]{
-                stretching_forces(nmd.points, nmd.edges, nmd.lengths, mech_params[0], force_sets[iter], stretch_assignments[iter], stretch_assignments[iter+1]);
+            g.run([nmd, &force_sets, stretch_assignments, iter]{
+                stretching_forces(nmd.points, nmd.edges, nmd.lengths, nmd.ks, force_sets[iter], stretch_assignments[iter], stretch_assignments[iter+1]);
             });
         }
         g.wait();
     }
 
-    if(mech_params[1] > 0){
+    if(nmd.kb > 0){
         for(iter = 0; iter < bend_assignments.size() - 1; iter++){
-            g.run([nmd, mech_params, &force_sets, bend_assignments, iter]{
-                bending_forces(nmd.points, nmd.triples, nmd.angles, mech_params[1], force_sets[iter], bend_assignments[iter], bend_assignments[iter+1]);
+            g.run([nmd, &force_sets, bend_assignments, iter]{
+                bending_forces(nmd.points, nmd.triples, nmd.angles, nmd.kb, force_sets[iter], bend_assignments[iter], bend_assignments[iter+1]);
             });
         }
         g.wait();
@@ -1324,8 +1412,8 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> mech_p
 
     if(nmd.tetrahedra.size()){
         for(iter = 0; iter < gel_assignments.size() - 1; iter++){
-            g.run([nmd, mech_params, &force_sets, gel_assignments, iter]{
-                gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5], force_sets[iter], gel_assignments[iter], gel_assignments[iter+1]);
+            g.run([nmd, &force_sets, gel_assignments, iter]{
+                gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.gmod, force_sets[iter], gel_assignments[iter], gel_assignments[iter+1]);
             });
         }
         g.wait();
@@ -1348,7 +1436,7 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> mech_p
 
 }
 
-void compute_forces_disjoint_parallel(NetworkMeshData &nmd,  vector<double> mech_params, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
+void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
 
     int iter, num_dof;
     cholmod_dense *net_forces, *net_contribution;
@@ -1365,12 +1453,12 @@ void compute_forces_disjoint_parallel(NetworkMeshData &nmd,  vector<double> mech
     }
 
     for(iter = 0; iter < gel_assignments.size() - 1; iter ++){
-        g.run([&nmd, mech_params, &force_sets, gel_assignments, iter]{
-            gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5], force_sets[iter], gel_assignments[iter], gel_assignments[iter+1]);
+        g.run([&nmd, &force_sets, gel_assignments, iter]{
+            gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.gmod, force_sets[iter], gel_assignments[iter], gel_assignments[iter+1]);
         });
     }
 
-    if(mech_params[0] > 0){
+    if(nmd.ks > 0){
         for(iter = 0; iter < stretch_assignments.size() - 1; iter++){
             g.run([nmd, &force_sets, stretch_assignments, iter]{
                 stretching_forces_disjoint(nmd.points, nmd.edges, nmd.lengths, nmd.stretching_constants, force_sets[iter], stretch_assignments[iter], stretch_assignments[iter+1]);
@@ -1379,7 +1467,7 @@ void compute_forces_disjoint_parallel(NetworkMeshData &nmd,  vector<double> mech
         g.wait();
     }
 
-    if(mech_params[1] > 0){
+    if(nmd.kb > 0){
         for(iter = 0; iter < bend_assignments.size() - 1; iter++){
             g.run([nmd, &force_sets, bend_assignments, iter]{
                 bending_forces_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants, force_sets[iter], bend_assignments[iter], bend_assignments[iter+1]);
@@ -1560,25 +1648,3 @@ bool compute_network_mesh_map(NetworkMeshData &nmd){
 
     return true;
 }
-
-//Lengths should be defined before this function is called
-void compute_stretching_constants(NetworkMeshData &nmd, double ks){
-
-    for(int iter = 0; iter < nmd.edges.size(); iter ++){
-        nmd.stretching_constants.push_back(ks / nmd.lengths[iter]);
-    }
-}
-
-void compute_bending_constants(NetworkMeshData &nmd, double kb){
-
-    int trip_iter, idx1, idx2, idx3;
-    Vec3D p1, p2, p3;
-
-    for(trip_iter = 0; trip_iter < nmd.triples.size(); trip_iter += 3){
-        assign(p1, nmd.points, nmd.triples[trip_iter]);
-        assign(p2, nmd.points, nmd.triples[trip_iter+1]);
-        assign(p3, nmd.points, nmd.triples[trip_iter+2]);
-        nmd.bending_constants.push_back(2*kb/(distance(p1,p2)+distance(p2,p3)));
-    }
-}
-

@@ -314,7 +314,6 @@ void compute_cell_data(vector<double> coordinates, Bounds3D bounds, int nx, int 
     vertex_sets.clear();
     face_sets.clear();
 
-    //voro::container con(bounds.min_x(), bounds.max_x(), bounds.min_y(), bounds.max_y(), bounds.min_z(), bounds.max_z(),nx,ny,nz,false,false,false,PTS_PER_BOX);
     voro::container_periodic con(bounds.max_x(), 0, bounds.max_y(), 0, 0, bounds.max_z(),nx,ny,nz,PTS_PER_BOX);
     for(int iter = 0; iter < coordinates.size(); iter += 3){
         con.put(iter/3, coordinates[iter], coordinates[iter+1], coordinates[iter+2]);
@@ -354,13 +353,8 @@ vector<double> compute_hyperuniform_packing(Bounds3D bounds, double density, dou
     //to a minimum separation between points
     cutoff = pow(DENSITY_TO_LENGTH / density, 1./3.);
 
-    /*std::cout << "Target density: " << density << std::endl;
-    std::cout << "Cutoff length: " << cutoff << std::endl;*/
-
     //Obtain the original Poisson packing
     coordinates = poisson_sphere_packing(bounds, cutoff);
-
-    //std::cout << "Number of points here: " << coordinates.size()/3 << std::endl;    
 
     noises.assign(coordinates.size() / 3, 0);
 
@@ -430,7 +424,6 @@ vector<double> compute_hyperuniform_packing(Bounds3D bounds, double density, dou
 	    rel_diff = abs((curr_noise - prev_noise) / prev_noise);
 	    prev_noise = curr_noise;
 
-        //std::cout << iter << "\t" << curr_noise << "\t " << rel_diff << std::endl;
     } while(rel_diff > conv_tol && ++iter < max_iter);
 
     return coordinates;

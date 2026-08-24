@@ -28,6 +28,12 @@
 #include <tbb.h>
 #include "network_gel_relax_utils.hpp"
 #include <time.h>
+#include <nlohmann/json.hpp>
+#include <sstream>
+#include <regex>
+#include <matheval.h>
+#include <cmath>
+#include <assert.h>
 
 //Default number of maximum steps for Newton-Raphson root finding
 #define DEFAULT_MAX_STEPS 1000
@@ -164,33 +170,71 @@ bool parse_cgtr_params(string nextline, CGTRParams &cgtrpar){
     return true;
 }
 
-//Given a rubber modulus, a temperature over a solvent volume, a Flory-Huggins
-//chi parameter, and a network bulk modulus, find the equilibrium swelling 
-//ratio of a composite tissue, and return the corresponding principal stretch.
-//double calc_equilibrium_swelling(double g, double excess_osm, double kt_o_omega, double chi, double k_network, int max_steps){
-double calc_equilibrium_swelling(double g, double excess_osm, double kt_o_omega, double chi, int max_steps){
+double calc_equilibrium_swelling(GelModel gmod, int max_steps){
 
-    //Relative dilation and first and second derivatives.
-    double j, first_deriv, second_deriv;
-    
-    int steps = 0;
-    j = 2;
-    //first_deriv = g*(pow(j, -1./3) - (1+excess_osm)/j) + kt_o_omega*(log((j-1)/j)+1/j+chi/(j*j)) + k_network*(j-1);
-    //first_deriv = g*(pow(j, -1./3) - 1/j) + kt_o_omega*(log((j-1)/j)+1/j+chi/(j*j)) + k_network/3*(pow(j, -1./3) - pow(j, -2./3));
-    first_deriv = g*(pow(j, -1./3) - 1/j) + kt_o_omega*(log((j-1)/j)+1/j+chi/(j*j)); 
+    int steps, count = gmod.param_values.size() + 1;
+    double first_deriv, second_deriv, stretch, curr_val, prev_val, opt_stretch;
+    void *f, *f_l, *f_ll;
+    vector<char *> arg_names;
+    vector<double> values;
+    std::ostringstream oss1, oss2, oss3;
+    std::regex i1_regex("I1");
+    std::regex i2_regex("I2");
+    std::regex j_regex("J");
+    const char *var_name = "stretch";
 
-    while(abs(first_deriv) > TOL && steps < max_steps){
-        //second_deriv = g*((1+excess_osm)/j/j - pow(j,-4./3)/3) + kt_o_omega*(1/(j*(j-1)) - 1/j/j - 2*chi/(j*j*j)) + k_network;
-        //second_deriv = g*(1/j/j - pow(j,-4./3)/3) + kt_o_omega*(1/(j*(j-1)) - 1/j/j - 2*chi/(j*j*j)) + k_network/9*(2*pow(j,-5./3) - pow(j, -4./3));
-        second_deriv = g*(1/j/j - pow(j,-4./3)/3) + kt_o_omega*(1/(j*(j-1)) - 1/j/j - 2*chi/(j*j*j));
-        j = max(j - first_deriv / second_deriv, 1 + TOL);
-        //first_deriv = g*(pow(j, -1./3) - (1+excess_osm)/j) + kt_o_omega*(log((j-1)/j)+1/j+chi/(j*j)) + k_network*(j-1);
-        //first_deriv = g*(pow(j, -1./3) - 1/j) + kt_o_omega*(log((j-1)/j)+1/j+chi/(j*j)) + k_network/3*(pow(j, -1./3) - pow(j, -2./3));
-        first_deriv = g*(pow(j, -1./3) - 1/j) + kt_o_omega*(log((j-1)/j)+1/j+chi/(j*j));
-        steps ++;
+    //Initialize the guess for the search
+    stretch = 2;
+
+    //Replace the principal invariants with appropriate functions of the
+    //common principal stretch for the case of isotropic swelling
+    string original = string(evaluator_get_string(gmod.energy_func));
+    oss1 << std::regex_replace(original, i1_regex, "(3*stretch^2)");
+    oss2 << std::regex_replace(oss1.str(), i2_regex, "(3*stretch^4)");
+    oss3 << std::regex_replace(oss2.str(), j_regex, "stretch^3");
+    f = evaluator_create((char *) oss3.str().c_str());
+    assert(f);
+
+    //Construct first partial derivatives
+    f_l = evaluator_derivative(f, (char *) var_name);
+    assert(f_l);
+    f_ll = evaluator_derivative(f_l, (char *) var_name);
+    assert(f_ll);
+
+    arg_names.push_back((char *) var_name);
+    for(int iter = 0; iter < count - 1; iter ++){
+        arg_names.push_back(gmod.arg_names[iter+gmod.inv_funcs.size()]);
     }
+    values.push_back(stretch);
+    values.insert(values.end(), gmod.param_values.begin(), gmod.param_values.end());
+    curr_val = evaluator_evaluate(f, count, &arg_names[0], &values[0]);
 
-    return pow(j, 1./3.);
+    cout << "Reached here.\n";
+
+    //Perform Newton's method searches
+    steps = 0;
+    do{
+
+        first_deriv = evaluator_evaluate(f_l, count, &arg_names[0], &values[0]);
+        second_deriv = evaluator_evaluate(f_ll, count,&arg_names[0],&values[0]);
+        steps ++;
+
+        stretch = fmax(stretch - first_deriv / second_deriv, 1. + TOL);
+        prev_val = curr_val;
+        values[0] = stretch;
+        curr_val = evaluator_evaluate(f, count, &arg_names[0], &values[0]);
+        if(fabs(curr_val - prev_val) < TOL) break;
+    } while(steps < max_steps && fabs(first_deriv) > TOL);
+
+    cout << "Reached here.\n";
+
+    evaluator_destroy(f);
+    evaluator_destroy(f_l);
+    evaluator_destroy(f_ll);
+
+    cout << "Reached here.\n";
+
+    return stretch;
 }
 
 //Uniformly dilate a composite tissue in a serial manner
@@ -264,7 +308,8 @@ void affine_deform_parallel(vector<double> &points, vector<double> &bounds, Vec3
 }
 
 //Perform a structural relaxation of a composite tissue in a serial manner.
-int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpar, double &f_rms){
+//int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpar, double &f_rms){
+int nlcg_relax(NetworkMeshData &nmd, NLCGParams cgpar, double &f_rms){
 
     int dim, num_dof, offset, cg_iter, cg_max, ls_iter, ls_max, reset_counter;
     vector<double> forces, search_dir, prev_forces;
@@ -274,7 +319,7 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
 
     //Method to toggle between unified and disjoint methods for computing
     //forces, without having to use large numbers of conditional evaluations
-    void(*force_func)(NetworkMeshData &nmd, vector<double> params, vector<double> &forces);
+    void(*force_func)(NetworkMeshData &nmd, vector<double> &forces);
 
     dim = nmd.points.size();
     if(nmd.type == nmc_type::disjoint){
@@ -307,8 +352,7 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
         force_func = compute_forces_disjoint;
     }
 
-    //compute_forces(points, top, bottom, edges, lengths, triples, angles, tets, volumes, inv_mats,  ks, kb, gmod, delta, kt_o_omega, chi, forces);
-    force_func(nmd, mech_params, forces);
+    force_func(nmd, forces);
 
     d_curr = cblas_dnrm2(num_dof, &forces[offset], 1);
     d_orig = d_curr;
@@ -325,7 +369,7 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
         //search direction with the search direction itself to facilitate the
         //secant line search method.
         cblas_daxpy(num_dof, FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
-        force_func(nmd, mech_params, forces);
+        force_func(nmd, forces);
         prev_grad_dir_prod = -cblas_ddot(num_dof,&forces[offset],1,&search_dir[0],1);
         cblas_daxpy(num_dof, -FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
         cblas_dcopy(num_dof, &prev_forces[0], 1, &forces[offset], 1);
@@ -340,7 +384,7 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
             ls_coeff *= grad_dir_prod / (prev_grad_dir_prod - grad_dir_prod);
             cblas_daxpy(num_dof, ls_coeff, &search_dir[0], 1, &(nmd.points[offset]), 1);
 
-            force_func(nmd, mech_params, forces);
+            force_func(nmd, forces);
 	        ls_iter ++;
             prev_grad_dir_prod = grad_dir_prod;
             sd_mag_sqr = cblas_ddot(num_dof, &search_dir[0], 1, &search_dir[0], 1);
@@ -375,20 +419,20 @@ int nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpa
 //Utility function to compute the total energy, rather than itemized energies,
 //using a serial computation for the case that network vertices are also gel
 //vertices.
-double total_energy_us(NetworkMeshData &nmd, vector<double> mech_params){
+double total_energy_us(NetworkMeshData &nmd){
 
     double energy = 0;
 
-    if(mech_params[0] > 0 && nmd.edges.size() > 0){
-        energy += stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
+    if(nmd.ks > 0 && nmd.edges.size() > 0){
+        energy += stretching_energy(nmd.points, nmd.edges, nmd.lengths, nmd.ks);
     }
 
-    if(mech_params[1] > 0 && nmd.triples.size() > 0){
-        energy += fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]); 
+    if(nmd.kb > 0 && nmd.triples.size() > 0){
+        energy += fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, nmd.kb); 
     }
 
     if(nmd.tetrahedra.size() > 0){
-        energy += calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        energy += calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.gmod);
     }
 
     return energy;
@@ -397,26 +441,27 @@ double total_energy_us(NetworkMeshData &nmd, vector<double> mech_params){
 //Utility function to compute the total energy, rather than itemized energies,
 //using a serial computation for the case that network vertices constitute
 //a disjoint set relative to the gel vertices.
-double total_energy_ds(NetworkMeshData &nmd, vector<double> mech_params){
+//double total_energy_ds(NetworkMeshData &nmd, vector<double> mech_params){
+double total_energy_ds(NetworkMeshData &nmd){
 
     double energy = 0;
 
-    if(mech_params[0] > 0 && nmd.edges.size() > 0){
+    if(nmd.ks > 0 && nmd.edges.size() > 0){
         energy += stretching_energy_disjoint(nmd.points, nmd.edges, nmd.lengths, nmd.stretching_constants);
     }
 
-    if(mech_params[1] > 0 && nmd.triples.size() > 0){
+    if(nmd.kb > 0 && nmd.triples.size() > 0){
         energy += fiber_bending_energy_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants);
     }
 
     if(nmd.tetrahedra.size() > 0){
-        energy += calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        energy += calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.gmod);
     }
 
     return energy;
 }
 
-int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtrpar, double &f_rms){
+int cgtr_relax(NetworkMeshData &nmd, CGTRParams cgtrpar, double &f_rms){
 
     int dim, num_dof, offset, max_outer, max_inner, n_outer, n_inner;
     double max_radius, min_ratio, conv_tol_sqr, radius, cf_model_ratio, curr_cf;
@@ -428,17 +473,21 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
 
     //Means of toggling between the unified and disjoint methods for
     //computing forces
-    void(*force_func)(NetworkMeshData &nmd, vector<double> params, vector<double> &forces);
-    double(*energy_func)(NetworkMeshData &nmd, vector<double> params);
+    void(*force_func)(NetworkMeshData &nmd, vector<double> &forces);
+    double(*energy_func)(NetworkMeshData &nmd);
 
     dim = nmd.points.size();
     if(nmd.type == nmc_type::disjoint){
         offset = 3*nmd.num_net_verts;
         num_dof = dim - offset;
+        force_func = compute_forces_disjoint;
+        energy_func = total_energy_ds;
     }
     else{
         offset = 0;
         num_dof = dim;
+        force_func = compute_forces_unified;
+        energy_func = total_energy_us;
     }
 
     //Unpack relaxation parameters and physical parameters
@@ -453,22 +502,14 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
     hess_dir_proj = vector<double>(dim, 0);
     step = vector<double>(num_dof, 0);
 
-    if(nmd.type == nmc_type::unified){
-        force_func = compute_forces_unified;
-        energy_func = total_energy_us;
-    }
-    else {
-        force_func = compute_forces_disjoint;
-        energy_func = total_energy_ds;
-    }
-
     //Evaluate the energy and forces at the outset
-    force_func(nmd,  mech_params, forces);
+    //force_func(nmd,  mech_params, forces);
+    force_func(nmd, forces);
     fmag_sqr_0 = cblas_ddot(num_dof, &forces[offset], 1, &forces[offset], 1);
     fmag_sqr = fmag_sqr_0;
     radius = max_radius;
 
-    prev_cf = energy_func(nmd, mech_params);
+    prev_cf = energy_func(nmd);
 
     for(n_outer = 0; n_outer < max_outer; ++n_outer){
 
@@ -486,7 +527,7 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
 
             //Find the curvature along the present search direction
             cblas_daxpy(num_dof, FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
-            force_func(nmd, mech_params, hess_dir_proj);
+            force_func(nmd, hess_dir_proj);
             cblas_daxpy(num_dof, -1., &forces[offset], 1, &hess_dir_proj[offset], 1);
             cblas_dscal(num_dof, -1./FINITE_DIFF_COEFF, &hess_dir_proj[offset], 1);
             sd_hess_norm = cblas_ddot(num_dof, &search_dir[0], 1, &hess_dir_proj[offset], 1);
@@ -538,7 +579,7 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
 
             //Evaluate the new model residual and update the search direction
             cblas_daxpy(num_dof, FINITE_DIFF_COEFF, &step[0], 1, &(nmd.points[offset]), 1);
-            force_func(nmd, mech_params, hess_dir_proj);
+            force_func(nmd, hess_dir_proj);
             cblas_daxpy(num_dof, -1., &forces[offset], 1, &hess_dir_proj[offset], 1);
             cblas_dscal(num_dof, -1./FINITE_DIFF_COEFF, &hess_dir_proj[offset], 1);
             cblas_daxpy(num_dof, -FINITE_DIFF_COEFF, &step[0], 1, &(nmd.points[offset]),1);
@@ -565,7 +606,7 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
         //decide whether to keep the search step.
         cblas_daxpy(num_dof, 1., &step[0], 1, &(nmd.points[offset]), 1);
 
-        curr_cf = energy_func(nmd, mech_params);
+        curr_cf = energy_func(nmd);
         cf_model_ratio = (prev_cf - curr_cf) / (prev_cf - mod_val); 
 
         //Address poor performance of the model by shrinking the trust radius
@@ -584,7 +625,7 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
         //If the ratio of actual to predicted improvement is inadequate, reject
         //the computed update step.
         if(cf_model_ratio >= min_ratio){
-            force_func(nmd, mech_params, forces);
+            force_func(nmd, forces);
             prev_cf = curr_cf;
         }
         else {
@@ -604,13 +645,13 @@ int cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtr
     //Refine the global search with a local nonlinear CG search
     NLCGParams cgpar(max_outer, max_inner, cgtrpar.conv_tol*sqrt(fmag_sqr_0/fmag_sqr));
 
-    n_outer += nlcg_relax(nmd, mech_params, cgpar, f_rms);
+    n_outer += nlcg_relax(nmd, cgpar, f_rms);
 
     return n_outer;
 }
 
 //Perform a structural relaxation of a composite tissue in a parallel manner.
-int parallel_nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGParams cgpar, int n_threads, double &f_rms){
+int parallel_nlcg_relax(NetworkMeshData &nmd, NLCGParams cgpar, int n_threads, double &f_rms){
 
     int dim, num_dof, offset, cg_iter, cg_max, ls_iter, ls_max, reset_counter;
     vector<double> forces, search_dir, prev_forces;
@@ -622,16 +663,18 @@ int parallel_nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGPa
 
     //Method to toggle between unified and disjoint methods for computing
     //forces, without having to use large numbers of conditional evaluations
-    void(*force_func)(NetworkMeshData &nmd, vector<double> params, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
+    void(*force_func)(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
 
     dim = nmd.points.size();
     if(nmd.type == nmc_type::disjoint){
         offset = 3*nmd.num_net_verts;
         num_dof = dim - offset;
+        force_func = compute_forces_disjoint_parallel;
     }
     else {
         offset = 0;
         num_dof = dim;
+        force_func = compute_forces_unified_parallel;
     }
 
     forces = vector<double>(dim, 0);
@@ -651,22 +694,13 @@ int parallel_nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGPa
     ls_max = cgpar.max_ls_iter;
     cg_tol_sqr = cgpar.tol*cgpar.tol;
 
-    //Choose the correct force and energy function pointers, and note the
-    //appropriate offset for position updates
-    if(nmd.type == nmc_type::unified) {
-        force_func = compute_forces_unified_parallel;
-    }
-    else {
-        force_func = compute_forces_disjoint_parallel;
-    }
-
     //Determine how jobs should be allotted to threads for each type of force
     //to be computed.
     stretch_assignments = job_assignments(nmd.edges.size()/2, n_threads);
     bend_assignments = job_assignments(nmd.triples.size()/3, n_threads);
     gel_assignments = job_assignments(nmd.tetrahedra.size()/4, n_threads);
 
-    force_func(nmd, mech_params, forces, force_sets, stretch_assignments, bend_assignments, gel_assignments);
+    force_func(nmd, forces, force_sets, stretch_assignments, bend_assignments, gel_assignments);
     d_curr = cblas_dnrm2(num_dof, &forces[offset], 1);
     d_orig = d_curr;
     cblas_dcopy(num_dof, &forces[offset], 1, &search_dir[0], 1);
@@ -682,7 +716,7 @@ int parallel_nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGPa
         //search direction with the search direction itself to facilitate the
         //secant line search method.
         cblas_daxpy(num_dof, FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
-        force_func(nmd, mech_params, forces, force_sets, stretch_assignments, bend_assignments, gel_assignments);
+        force_func(nmd, forces, force_sets, stretch_assignments, bend_assignments, gel_assignments);
         prev_grad_dir_prod = -cblas_ddot(num_dof,&forces[offset],1,&search_dir[0],1);
         cblas_daxpy(num_dof, -FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
         cblas_dcopy(num_dof, &prev_forces[0], 1, &forces[offset], 1);
@@ -697,7 +731,7 @@ int parallel_nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGPa
             ls_coeff *= grad_dir_prod / (prev_grad_dir_prod - grad_dir_prod);
             cblas_daxpy(num_dof, ls_coeff, &search_dir[0], 1, &(nmd.points[offset]), 1);
 
-            force_func(nmd, mech_params, forces, force_sets, stretch_assignments, bend_assignments, gel_assignments);
+            force_func(nmd, forces, force_sets, stretch_assignments, bend_assignments, gel_assignments);
 	        ls_iter ++;
             prev_grad_dir_prod = grad_dir_prod;
             sd_mag_sqr = cblas_ddot(num_dof, &search_dir[0], 1, &search_dir[0], 1);
@@ -731,20 +765,20 @@ int parallel_nlcg_relax(NetworkMeshData &nmd, vector<double> mech_params, NLCGPa
 
 //Compute the total energy using parallelized routines in the case that the
 //network vertices are a subset of the gel vertices
-double total_energy_up(NetworkMeshData &nmd, vector<double> mech_params){
+double total_energy_up(NetworkMeshData &nmd){
 
     double energy = 0;
 
-    if(mech_params[0] > 0 && nmd.edges.size() > 0){
-        energy += parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
+    if(nmd.ks > 0 && nmd.edges.size() > 0){
+        energy += parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, nmd.ks);
     }
 
-    if(mech_params[1] > 0 && nmd.triples.size() > 0){
-        energy += parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
+    if(nmd.kb > 0 && nmd.triples.size() > 0){
+        energy += parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, nmd.kb);
     }
 
     if(nmd.tetrahedra.size() > 0){
-        energy += parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+        energy += parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.gmod);
     }
 
     return energy;
@@ -752,24 +786,25 @@ double total_energy_up(NetworkMeshData &nmd, vector<double> mech_params){
 
 //Compute the total energy using parallelized routines in the case that the
 //network vertices are a disjoint set from the gel vertices
-double total_energy_dp(NetworkMeshData &nmd, vector<double> mech_params){
+//double total_energy_dp(NetworkMeshData &nmd, vector<double> mech_params){
+double total_energy_dp(NetworkMeshData &nmd){
 
     double energy = 0;
 
-    if(mech_params[0] > 0 && nmd.edges.size() > 0){
+    if(nmd.ks > 0 && nmd.edges.size() > 0){
         energy += parallel_stretching_energy_disjoint(nmd.points, nmd.edges, nmd.lengths, nmd.stretching_constants);
     }
 
-    if(mech_params[1] > 0 && nmd.triples.size() > 0){
+    if(nmd.kb > 0 && nmd.triples.size() > 0){
         energy += parallel_fiber_bending_energy_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants);
     }
 
-    energy += parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
+    energy += parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.gmod);
 
     return energy;
 }
 
-int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRParams cgtrpar, int n_threads, double &f_rms){
+int parallel_cgtr_relax(NetworkMeshData &nmd, CGTRParams cgtrpar, int n_threads, double &f_rms){
 
     int dim, num_dof, offset, max_outer, max_inner, n_outer, n_inner;
     double max_radius, min_ratio, conv_tol_sqr, radius, cf_model_ratio, curr_cf;
@@ -783,17 +818,21 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
 
     //Means of toggling between the unified and disjoint methods for
     //computing forces
-    void(*force_func)(NetworkMeshData &nmd, vector<double> params, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
-    double(*energy_func)(NetworkMeshData &nmd, vector<double> params);
+    void(*force_func)(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
+    double(*energy_func)(NetworkMeshData &nmd);
 
     dim = nmd.points.size();
     if(nmd.type == nmc_type::disjoint){
         offset = 3*nmd.num_net_verts;
         num_dof = dim - offset;
+        force_func = compute_forces_disjoint_parallel;
+        energy_func = total_energy_dp;
     }
     else{
         offset = 0;
         num_dof = dim;
+        force_func = compute_forces_unified_parallel;
+        energy_func = total_energy_up;
     }
 
     //Unpack relaxation parameters and physical parameters
@@ -808,15 +847,6 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
     hess_dir_proj = vector<double>(dim, 0);
     step = vector<double>(num_dof, 0);
 
-    if(nmd.type == nmc_type::unified){
-        force_func = compute_forces_unified_parallel;
-        energy_func = total_energy_up;
-    }
-    else {
-        force_func = compute_forces_disjoint_parallel;
-        energy_func = total_energy_dp;
-    }
-
     //Allocate sets of auxilliary force vectors to enable parallel computation
     for(int iter = 0; iter < n_threads; iter++){
         force_sets.push_back(vector<double>(dim, 0));
@@ -828,12 +858,12 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
     gel_assignments = job_assignments(nmd.tetrahedra.size()/4, n_threads);
 
     //Evaluate the energy and forces at the outset
-    force_func(nmd,  mech_params, forces, force_sets, stretch_assignments, bend_assignments, gel_assignments);
+    force_func(nmd, forces, force_sets, stretch_assignments, bend_assignments, gel_assignments);
     fmag_sqr_0 = cblas_ddot(num_dof, &forces[offset], 1, &forces[offset], 1);
     fmag_sqr = fmag_sqr_0;
     radius = max_radius;
 
-    prev_cf = energy_func(nmd, mech_params);
+    prev_cf = energy_func(nmd);
 
     for(n_outer = 0; n_outer < max_outer; ++n_outer){
 
@@ -851,7 +881,7 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
 
             //Find the curvature along the present search direction
             cblas_daxpy(num_dof, FINITE_DIFF_COEFF, &search_dir[0], 1, &(nmd.points[offset]), 1);
-            force_func(nmd,  mech_params, hess_dir_proj, force_sets, stretch_assignments, bend_assignments, gel_assignments);
+            force_func(nmd, hess_dir_proj, force_sets, stretch_assignments, bend_assignments, gel_assignments);
             cblas_daxpy(num_dof, -1., &forces[offset], 1, &hess_dir_proj[offset], 1);
             cblas_dscal(num_dof, -1./FINITE_DIFF_COEFF, &hess_dir_proj[offset], 1);
             sd_hess_norm = cblas_ddot(num_dof, &search_dir[0], 1, &hess_dir_proj[offset], 1);
@@ -903,7 +933,7 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
 
             //Evaluate the new model residual and update the search direction
             cblas_daxpy(num_dof, FINITE_DIFF_COEFF, &step[0], 1, &(nmd.points[offset]), 1);
-            force_func(nmd,  mech_params, hess_dir_proj, force_sets, stretch_assignments, bend_assignments, gel_assignments);
+            force_func(nmd, hess_dir_proj, force_sets, stretch_assignments, bend_assignments, gel_assignments);
             cblas_daxpy(num_dof, -1., &forces[offset], 1, &hess_dir_proj[offset], 1);
             cblas_dscal(num_dof, -1./FINITE_DIFF_COEFF, &hess_dir_proj[offset], 1);
             cblas_daxpy(num_dof, -FINITE_DIFF_COEFF, &step[0], 1, &(nmd.points[offset]),1);
@@ -930,7 +960,7 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
         //decide whether to keep the search step.
         cblas_daxpy(num_dof, 1., &step[0], 1, &(nmd.points[offset]), 1);
 
-        curr_cf = energy_func(nmd, mech_params);
+        curr_cf = energy_func(nmd);
         cf_model_ratio = (prev_cf - curr_cf) / (prev_cf - mod_val); 
 
         //Address poor performance of the model by shrinking the trust radius
@@ -949,7 +979,7 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
         //If the ratio of actual to predicted improvement is inadequate, reject
         //the computed update step.
         if(cf_model_ratio >= min_ratio){
-            force_func(nmd,  mech_params, forces, force_sets, stretch_assignments, bend_assignments, gel_assignments);
+            force_func(nmd, forces, force_sets, stretch_assignments, bend_assignments, gel_assignments);
             prev_cf = curr_cf;
         }
         else {
@@ -969,16 +999,95 @@ int parallel_cgtr_relax(NetworkMeshData &nmd, vector<double> mech_params, CGTRPa
     //Refine the global search with a local nonlinear CG search
     NLCGParams cgpar(max_outer, max_inner, cgtrpar.conv_tol*sqrt(fmag_sqr_0/fmag_sqr));
 
-    n_outer += nlcg_relax(nmd, mech_params, cgpar, f_rms);
+    n_outer += nlcg_relax(nmd, cgpar, f_rms);
 
     return n_outer;
+}
+
+//Utility function to compute the total energy, rather than itemized energies,
+//using a serial computation for the case that network vertices are also gel
+//vertices.
+void itemized_energy_us(NetworkMeshData &nmd, double &estretch, double &ebend, double &egel){
+
+    estretch = ebend = egel = 0;
+
+    if(nmd.ks > 0 && nmd.edges.size() > 0){
+        estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, nmd.ks);
+    }
+
+    if(nmd.kb > 0 && nmd.triples.size() > 0){
+        ebend = fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, nmd.kb); 
+    }
+
+    if(nmd.tetrahedra.size() > 0){
+        egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.gmod);
+    }
+}
+
+//Utility function to compute the total energy, rather than itemized energies,
+//using a serial computation for the case that network vertices constitute
+//a disjoint set relative to the gel vertices.
+//double total_energy_ds(NetworkMeshData &nmd, vector<double> mech_params){
+void itemized_energy_ds(NetworkMeshData &nmd, double &estretch, double &ebend, double &egel){
+
+    estretch = ebend = egel = 0;
+
+    if(nmd.ks > 0 && nmd.edges.size() > 0){
+        estretch = stretching_energy_disjoint(nmd.points, nmd.edges, nmd.lengths, nmd.stretching_constants);
+    }
+
+    if(nmd.kb > 0 && nmd.triples.size() > 0){
+        ebend = fiber_bending_energy_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants);
+    }
+
+    if(nmd.tetrahedra.size() > 0){
+        egel = calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.gmod);
+    }
+}
+
+
+//Compute the total energy using parallelized routines in the case that the
+//network vertices are a subset of the gel vertices
+void itemized_energy_up(NetworkMeshData &nmd, double &estretch, double &ebend, double &egel){
+
+    estretch = ebend = egel = 0;
+
+    if(nmd.ks > 0 && nmd.edges.size() > 0){
+        estretch = parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, nmd.ks);
+    }
+
+    if(nmd.kb > 0 && nmd.triples.size() > 0){
+        ebend += parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, nmd.kb);
+    }
+
+    if(nmd.tetrahedra.size() > 0){
+        egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.gmod);
+    }
+}
+
+//Compute the total energy using parallelized routines in the case that the
+//network vertices are a disjoint set from the gel vertices
+//double total_energy_dp(NetworkMeshData &nmd, vector<double> mech_params){
+void itemized_energy_dp(NetworkMeshData &nmd, double &estretch, double &ebend, double &egel){
+
+    estretch = ebend = egel = 0;
+
+    if(nmd.ks > 0 && nmd.edges.size() > 0){
+        estretch = parallel_stretching_energy_disjoint(nmd.points, nmd.edges, nmd.lengths, nmd.stretching_constants);
+    }
+
+    if(nmd.kb > 0 && nmd.triples.size() > 0){
+        ebend = parallel_fiber_bending_energy_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants);
+    }
+
+    egel = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.gmod);
 }
 
 //Direct a course of deformation and structural relaxation. Given the specified
 //number of threads, use either the serial or parallel structural relaxation
 //function. Report the relaxed energy, deformed coordinates, and logfile
 //information for each coarse increment.
-void do_relaxation_run(string nmc_file, string log_name, string edat_name, string nmt_base, vector<double> mech_params, CGTRParams par, vector<DisplacementProgram> progs, bool strain_mode, int n_threads, nmc_type type){
+void do_relaxation_run(string nmc_file, string log_name, string edat_name, string nmt_base, double ks, double kb, GelModel gmod, CGTRParams par, vector<DisplacementProgram> progs, bool strain_mode, int n_threads, nmc_type type){
 
     int n_steps, num_digits, i, j;
     NetworkMeshData nmd(type);
@@ -990,12 +1099,20 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     clock_t ct;
     bool parallel = n_threads > 1;
 
+    //Functions to handle itemized energy calculations
+    void(*unified_itemized_energy)(NetworkMeshData &nmd, double &estretch, double &ebend, double &egel);
+    void(*disjoint_itemized_energy)(NetworkMeshData &nmd, double &estretch, double &ebend, double &egel);
+
     //Attempt to read a network mesh composite (NMC) file, and intialize
     //vertices, edges, triples, mesh elements, and associated data structures.
     if(! parse_nmc_file(nmc_file, nmd)){
         cerr << "Parsing of the network mesh complex file failed.\n";
         return;
     }
+
+    nmd.ks = ks;
+    nmd.kb = kb;
+    nmd.gmod = gmod;
 
     //Attempt to open a log file
     log_file = fopen(log_name.c_str(), "w");
@@ -1014,16 +1131,45 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
 
     //If detailed displaced position data are to be recorded, open a manifest
     if(nmt_base != ""){
-        RelaxParams rp(mech_params[0], mech_params[1], mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-        if(!open_network_mesh_trajectory(nmt_base, nmc_file, rp, xml_name, nmt_name)){
-            cerr << "The network-mesh trajectory files could not be opened.\n";
-            fclose(log_file);
-            fclose(edat_file);
-            return;
+        if(gmod.initialized){
+            if(!open_network_mesh_trajectory(nmt_base, nmc_file, ks, kb, evaluator_get_string(gmod.energy_func), gmod.arg_names + gmod.inv_funcs.size(), gmod.param_values, xml_name, nmt_name)){
+                cerr << "The network-mesh trajectory files could not be opened.\n";
+                fclose(log_file);
+                fclose(edat_file);
+                return;
+            }
+        }
+        else{
+            if(!open_network_mesh_trajectory(nmt_base, nmc_file, ks, kb, NULL, NULL, gmod.param_values, xml_name, nmt_name)){
+                cerr << "The network-mesh trajectory files could not be opened.\n";
+                fclose(log_file);
+                fclose(edat_file);
+                return;
+            }
+        }
+    }
+
+    //Select the correct energy function
+    if(type == nmc_type::disjoint) {
+        if(n_threads > 1){
+            disjoint_itemized_energy = itemized_energy_dp;
+        }
+        else {
+            disjoint_itemized_energy = itemized_energy_ds;
+        }
+    }
+    else {
+        if(n_threads > 1){
+            unified_itemized_energy = itemized_energy_up;
+        }
+        else {
+            unified_itemized_energy = itemized_energy_us;
         }
     }
 
     volume = (nmd.bounds[1]-nmd.bounds[0])*(nmd.bounds[3]-nmd.bounds[2])*(nmd.bounds[5]-nmd.bounds[4]);
+
+    cout << "Checkpoint 1.\n";
 
     //Find the equilibrium swollen state at the outset.
 
@@ -1050,9 +1196,15 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     //Use root-finding to compute the swelling equilibrium, apply the
     //appropriate swelling ratio, and equilibrate to account for local
     //heterogeneity. 
-    swelling = calc_equilibrium_swelling(mech_params[2], mech_params[3], mech_params[4], mech_params[5], DEFAULT_MAX_STEPS);
+    swelling = calc_equilibrium_swelling(gmod, DEFAULT_MAX_STEPS);
     cout << "Swelling: " << swelling << endl;
-    dilate_vertices(nmd.points, nmd.bounds, 1/swelling);
+
+    if(n_threads == 1){
+        dilate_vertices(nmd.points, nmd.bounds, 1/swelling);
+    }
+    else {
+        dilate_vertices_parallel(nmd.points, nmd.bounds, 1/swelling);
+    }
 
     //Find tetrahedron volumes
     calc_volumes(nmd);
@@ -1060,8 +1212,8 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     //Make a record of the reference positions of network vertices
     if(type == nmc_type::disjoint){
         nmd.reference_points.assign(nmd.points.begin(), nmd.points.begin()+3*nmd.num_net_verts);
-        compute_stretching_constants(nmd, mech_params[0]);
-        compute_bending_constants(nmd, mech_params[1]);
+        nmd.compute_stretching_constants();
+        nmd.compute_bending_constants();
     }
 
     //Find matrices for computing local affine transformations
@@ -1074,46 +1226,29 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
         compute_network_mesh_map(nmd);
     }
 
-    dilate_vertices(nmd.points, nmd.bounds, swelling);
+    if(n_threads == 1){
+        dilate_vertices(nmd.points, nmd.bounds, swelling);
+    }
+    else {
+        dilate_vertices_parallel(nmd.points, nmd.bounds, swelling);
+    }
+
     total_displacement = Vec3D(0, 0, 0);
-    estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
-    cout << "Stretching energy after dilation: " << estretch << endl;
-    if(type == nmc_type::unified){
-        egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-    }
-    else{
-        egel = calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-    }
-    cout << "Gel energy: " << egel << endl;
 
     ct = clock();
     if(! parallel){
-        n_steps = cgtr_relax(nmd, mech_params, par, f_rms);
+        n_steps = cgtr_relax(nmd, par, f_rms);
     }
     else {
-        n_steps = parallel_cgtr_relax(nmd, mech_params, par, n_threads, f_rms);
+        n_steps = parallel_cgtr_relax(nmd, par, n_threads, f_rms);
     }
     ct = clock() - ct;
 
-    if(! parallel){
-        estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
-	    ebend = fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-        if(nmd.type == nmc_type::unified){
-            egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-        }
-        else {
-            egel = calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-        }
+    if(type == nmc_type::disjoint){
+        disjoint_itemized_energy(nmd, estretch, ebend, egel);
     }
-    else{
-        estretch = parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
-	    ebend = parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-        if(nmd.type == nmc_type::unified){
-            egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-        }
-        else {
-            egel = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-        }
+    else {
+        unified_itemized_energy(nmd, estretch, ebend, egel);
     }
     report_edata(edat_file, total_displacement, estretch, ebend, egel);
     log_entry(log_file, f_rms, n_steps, ct);
@@ -1174,31 +1309,17 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
                 for(j = 0; j < 2*next_prog.num_fine + 1; j++){
                     ct = clock();
                     if(! parallel){
-                        n_steps = cgtr_relax(nmd, mech_params, par, f_rms);
+                        n_steps = cgtr_relax(nmd, par, f_rms);
                     }
                     else {
-                        n_steps = parallel_cgtr_relax(nmd, mech_params, par, n_threads, f_rms);
+                        n_steps = parallel_cgtr_relax(nmd,par,n_threads,f_rms);
                     }
                     ct = clock() - ct;
-                    if(! parallel){
-                        estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
-                        ebend = fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                        if(nmd.type == nmc_type::unified){
-                            egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-                        }
-                        else {
-                            egel = calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-                        }
+                    if(type == nmc_type::disjoint){
+                        disjoint_itemized_energy(nmd, estretch, ebend, egel);
                     }
-                    else{
-                        estretch = parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
-                        ebend = parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                        if(nmd.type == nmc_type::unified){
-                            egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-                        }
-                        else {
-                            egel = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-                        }
+                    else {
+                        unified_itemized_energy(nmd, estretch, ebend, egel);
                     }
                     report_edata(edat_file, total_displacement, estretch, ebend, egel);
                     log_entry(log_file, f_rms, n_steps, ct);
@@ -1226,32 +1347,18 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
             else{
                 ct = clock();
                 if(! parallel){
-                    n_steps = cgtr_relax(nmd, mech_params, par, f_rms);
+                    n_steps = cgtr_relax(nmd, par, f_rms);
                 }
                 else {
-                    n_steps = parallel_cgtr_relax(nmd, mech_params, par, n_threads, f_rms);
+                    n_steps = parallel_cgtr_relax(nmd, par, n_threads, f_rms);
                 }
                 ct = clock() - ct;
 
-                if(! parallel){
-                    estretch = stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
-                    ebend = fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                    if(nmd.type == nmc_type::unified){
-                        egel = calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-                    }
-                    else {
-                        egel = calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-                    }
+                if(type == nmc_type::disjoint){
+                    disjoint_itemized_energy(nmd, estretch, ebend, egel);
                 }
-                else{
-                    estretch = parallel_stretching_energy(nmd.points, nmd.edges, nmd.lengths, mech_params[0]);
-                    ebend = parallel_fiber_bending_energy(nmd.points, nmd.triples, nmd.angles, mech_params[1]);
-                    if(nmd.type == nmc_type::unified){
-                        egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-                    }
-                    else {
-                        egel = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, mech_params[2], mech_params[3], mech_params[4], mech_params[5]);
-                    }
+                else {
+                    unified_itemized_energy(nmd, estretch, ebend, egel);
                 }
                 report_edata(edat_file, total_displacement, estretch, ebend, egel);
                 log_entry(log_file, f_rms, n_steps, ct);
@@ -1290,9 +1397,7 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     }
 }
 
-//Parse an input file specifying an input NMC file, a tag for labeling output,
-//material properties, and a program of displacements to impose.
-bool parse_input_file(string file_name, string &nmc_file, string &tag, vector<double> &mech_params, CGTRParams &cgtrpar, vector<DisplacementProgram> &progs){
+bool parse_input_file(string file_name, string &nmc_file, string &tag, double &ks, double &kb, GelModel &gmod, CGTRParams &cgtrpar, vector<DisplacementProgram> &progs){
 
     ifstream input;
     string nextline;
@@ -1300,102 +1405,142 @@ bool parse_input_file(string file_name, string &nmc_file, string &tag, vector<do
     double x, y, z, fine_mag;
     int n_coarse, n_fine, num_read;
     Vec3D coarse_disp, fine_disp;
+    json parsed;
 
     input.open(file_name);
     if(! input.is_open()){
-        cerr << "The input file could not be opened.\n";
+        cerr << "The job file could not be opened.\n";
         return false;
     }
-
-    //Attempt to read NMC file and tag
-    while(! input.eof()){
-        getline(input, nextline);
-        if(! nextline.compare("") || nextline[0] == '#') continue;
-
-        tokens = split(nextline, ' ');
-        nmc_file = tokens[0];
-        if(tokens.size() > 1) tag = tokens[1];
-        break;
+    //Attempt to parse the specified file
+    try{
+        parsed = json::parse(input);
     }
-    if(input.eof()){
+    catch(exception &e){
+        cerr << e.what() << endl;
         input.close();
-        cerr << "Not all information could be read from the job file.\n";
         return false;
-    }
-
-    //Attempt to read fiber stretching stiffness, fiber bending stiffness,
-    //gel rubber modulus, excess osmolarity, temperature divided by solvent 
-    //molecule volume, and chi parameter describing wetability
-    while(! input.eof()){
-        getline(input, nextline);
-        if(! nextline.compare("") || nextline[0] == '#') continue;
-
-        tokens = split(nextline, ' ');
-        mech_params = parse_doubles(tokens);
-        if(mech_params.size() != 6){
-            cerr << "Six mechanical parameters could not be read.\n";
-            input.close();
-            return false;
-        }
-        break;
-    }
-    if(input.eof()){
-        input.close();
-        cerr << "Not all information could be read from the job file.\n";
-        return false;
-    }
-
-    //Attempt to read instructions for relaxation. I have implemented both
-    //the nonlinear conjugate gradient and Steihaug CG-Trust region methods.
-    //I think a trust region will prove important in avoiding some  pathological
-    //behavior I have observed.
-    while(! input.eof()){
-        getline(input, nextline);
-        if(! nextline.compare("") || nextline[0] == '#') continue;
-        if(! parse_cgtr_params(nextline, cgtrpar)){
-            cerr << "Not all relaxation parameters could be read.\n";
-            input.close();
-            return false;
-        }
-        break;
-    }
-    if(input.eof()){
-        input.close();
-        cerr << "Not all information could be read from the job file.\n";
-        return false;
-    }
-
-    //Attempt to read a series of deformations
-    while(! input.eof()){
-        getline(input, nextline);
-        if(! nextline.compare("") || nextline[0] == '#') continue;
-        num_read = sscanf(nextline.c_str(), "%lf %lf %lf %d %lf %d", &x, &y, &z, &n_coarse, &fine_mag, &n_fine);
-
-        if(num_read == 4){
-            progs.push_back(DisplacementProgram(Vec3D(x, y, z), n_coarse));
-        }
-
-        else if(num_read == 6){
-            coarse_disp = Vec3D(x, y, z);
-            copy(coarse_disp, fine_disp);
-            scalar_multiply(fine_disp, fine_mag / magnitude(coarse_disp));
-            progs.push_back(DisplacementProgram(coarse_disp, n_coarse, fine_disp, n_fine));
-        }
-
-        else{
-            cerr << "Expected 4 or 6 strain params but found " << num_read << "\n";
-            input.close();
-            return false;
-        }
     }
 
     input.close();
-    if(progs.size() == 0) cerr << "No strain instructions could be read.\n";
-    return progs.size() > 0;
+
+    //Look for each required and optional field of the file
+
+    //Name pattern
+    if(parsed.contains("name_pattern")){
+        nmc_file = parsed["name_pattern"].get<string>();
+    }
+    else {
+        cerr << "Missing required field: name_pattern\n";
+        return false;
+    }
+
+    //Optional name tag
+    if(parsed.contains("tag")){
+        tag = parsed["tag"].get<string>();
+    }
+    else tag = "";
+
+    //Network mechanical parameters
+    if(parsed.contains("ks")){
+        if(parsed["ks"].is_number_float()){
+            ks = parsed["ks"].get<double>();
+        }
+        else {
+            cerr << "The stretching stiffness should be a number.\n";
+            return false;
+        }
+    }
+    else {
+        cerr << "Missing required field: ks\n";
+        return false;
+    }
+
+    if(parsed.contains("kb")){
+        if(parsed["ks"].is_number_float()){
+            kb = parsed["kb"].get<double>();
+        }
+        else {
+            cerr << "The bending stiffness should be a number.\n";
+            return false;
+        }
+    }
+    else {
+        cerr << "Missing required field: kb\n";
+        return false;
+    }
+
+    //Parameters of the optimization scheme - at the present, relaxation
+    //begins with a Steihaug Conjugate Gradient Trust Region method, and
+    //the resulting guess is then refined with a nonlinear conjugate gradient
+    //method using secant method line searches and Polak-Ribiere direction
+    //updates.
+    if(parsed.contains("relax_params")){
+        if(parsed["relax_params"].is_string()){
+            nextline = parsed["relax_params"].get<string>();
+            if(! parse_cgtr_params(nextline, cgtrpar)){
+                cerr << "Not all relaxation parameters could be read.\n";
+                return false;
+            }
+        }
+        else{
+            cerr << "The relax params field was improperly formatted.\n";
+            return false;
+        }
+    }
+    else {
+        cerr << "Missing required field: relax_params\n";
+        return false;
+    }
+
+    //Types of displacements to impose
+    if(parsed.contains("displacements")){
+        if(parsed["displacements"].is_array()){
+            vector<string> displacements = parsed["displacements"].get<vector<string>>();
+            for(string next_disp : displacements){
+                num_read = sscanf(next_disp.c_str(), "%lf %lf %lf %d %lf %d", &x, &y, &z, &n_coarse, &fine_mag, &n_fine);
+
+                if(num_read == 4){
+                    progs.push_back(DisplacementProgram(Vec3D(x, y, z), n_coarse));
+                }
+
+                else if(num_read == 6){
+                    coarse_disp = Vec3D(x, y, z);
+                    copy(coarse_disp, fine_disp);
+                    scalar_multiply(fine_disp, fine_mag / magnitude(coarse_disp));
+                    progs.push_back(DisplacementProgram(coarse_disp, n_coarse, fine_disp, n_fine));
+                }
+
+                else{
+                    cerr << "Expected 4 or 6 strain params but found " << num_read << "\n";
+                    return false;
+                }
+            }
+        }
+
+        else{
+            cerr << "The displacements field should be an array of strings describing coarse, and optionally fine, increments.\n";
+            return false;
+        }
+    }
+    else{
+        cerr << "Missing field: displacements\n";
+        return false;
+    }
+
+    //Constitutive model of the gel
+    if(parsed.contains("gel")){
+        if(! gmod.initialize(parsed["gel"])){
+            cerr << "The gel model could not be parsed.\n";
+            return false;
+        }
+    }
+
+    return true;
 }
 
 //Batch process a set of .nmc files following a specified naming convention
-void relaxation_batch(string base_name, string tag, string extension, vector<double> mech_params, CGTRParams cgtrpar, vector<DisplacementProgram> progs, bool strain_mode, int n_threads, nmc_type type){
+void relaxation_batch(string base_name, string tag, string extension, double ks, double kb, GelModel gmod, CGTRParams cgtrpar, vector<DisplacementProgram> progs, bool strain_mode, int n_threads, nmc_type type){
 
     int iter;
     vector<string> net_files, log_files, disp_files, edat_files;
@@ -1406,7 +1551,7 @@ void relaxation_batch(string base_name, string tag, string extension, vector<dou
     }
 
     for(iter = 0; iter < net_files.size(); iter ++){
-        do_relaxation_run(net_files[iter], log_files[iter], edat_files[iter], disp_files[iter], mech_params, cgtrpar, progs, strain_mode, n_threads, type);
+        do_relaxation_run(net_files[iter], log_files[iter], edat_files[iter], disp_files[iter], ks, kb, gmod, cgtrpar, progs, strain_mode, n_threads, type);
     }
 }
 
@@ -1417,12 +1562,13 @@ int main(int argc, char **argv){
     char c;
     int num_read, n_threads = 1;
     bool strain_mode = true;
-    vector<double> mech_params;
     string batch_file = "", base;
     string nmc_base, tag, extension;
     CGTRParams cgtrpar;
     vector<DisplacementProgram> progs;
     nmc_type type = nmc_type::unified;
+    double ks, kb;
+    GelModel gmod;
 
     //By default, look for .nmc extension
     extension = "nmc";
@@ -1477,7 +1623,7 @@ int main(int argc, char **argv){
     }
 
     //Attempt to read instructions from the specified job file
-    if(! parse_input_file(string(batch_file), base, tag, mech_params, cgtrpar, progs)){
+    if(! parse_input_file(string(batch_file), base, tag, ks, kb, gmod, cgtrpar, progs)){
         cerr << "Parsing of the job file failed.\n";
         return -2;
     }
@@ -1485,7 +1631,7 @@ int main(int argc, char **argv){
     //Attempt to perform structural relaxation of network-mesh composites
     //specified in files matching a given file pattern, according to the 
     //provided mechanical and relaxation parameters
-    relaxation_batch(base, tag, extension, mech_params, cgtrpar, progs, strain_mode, n_threads, type);
+    relaxation_batch(base, tag, extension, ks, kb, gmod, cgtrpar, progs, strain_mode, n_threads, type);
 
     return 0;
 }

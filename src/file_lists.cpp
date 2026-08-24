@@ -125,11 +125,5 @@ bool get_file_lists(string input, string tag, string extension, vector<string> &
 		}
 	}
 
-	//Sort the results
-    //sort(nmc_files.begin(), nmc_files.end());
-    //sort(log_files.begin(), log_files.end());
-    //sort(nmt_files.begin(), nmt_files.end());
-    //sort(edat_files.begin(), edat_files.end());
-
 	return true;
 }
