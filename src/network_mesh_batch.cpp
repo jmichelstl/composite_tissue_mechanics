@@ -446,16 +446,20 @@ string output_name_simple(string base, string ext){
 string output_name_verbose(string base, int bop_digits, int total_seq_digits, double bop, int seq_num, string ext){
 
     ostringstream oss;
-    int curr_seq_digits, bop_rep;
+    int curr_seq_digits, bop_rep, bop_rep_digits, iter;
 
     oss << base << "_";
 
-    bop_rep = (int) round(bop * pow(10, bop_digits));
+    bop_rep = (int) round(bop * pow(10, bop_digits - 1));
+    bop_rep_digits = get_dec_digits(bop_rep);
     curr_seq_digits = get_dec_digits(seq_num);
 
+    for(iter = 0; iter < bop_digits - bop_rep_digits; iter ++){
+        oss << "0";
+    }
     oss << bop_rep << "_";
 
-    for(int iter = 0; iter < total_seq_digits - curr_seq_digits; iter ++){
+    for(iter = 0; iter < total_seq_digits - curr_seq_digits; iter ++){
         oss << "0";
     }
     oss << seq_num << ext;
@@ -479,7 +483,7 @@ void lattice_based_batch(NMCJob job, bool use_verbose, int real_dec_digits){
     shared_ptr<LatticeBasedNMC> lbnmc = make_shared<LatticeBasedNMC>(job.bounds, lbp->get_file(), lbp->get_scale(), job.max_vol);
     lbnmc->build_network();
 
-    for(bop = job.bop_par.min; bop <= job.bop_par.max; bop += job.bop_par.inc){
+    for(bop = job.bop_par.min; bop <= job.bop_par.max + TOL; bop += job.bop_par.inc){
         for(int iter = 1; iter <= job.realizations; iter++){
 
             //Generate the output name and report the structure to a file
@@ -508,7 +512,7 @@ void off_lattice_batch(NMCJob job, bool use_verbose, int real_dec_digits){
     if(job.max_vol > 0) ext = ".dnmc";
     else ext = ".nmc";
 
-    for(bop = job.bop_par.min; bop <= job.bop_par.max; bop += job.bop_par.inc){
+    for(bop = job.bop_par.min; bop <= job.bop_par.max + TOL; bop += job.bop_par.inc){
         for(int iter = 1; iter <= job.realizations; iter++){
 
             //Generate the output name and report the structure to a file
@@ -562,6 +566,7 @@ int main(int argc, char **argv){
     }
 
     if(job.realizations > 1) real_dec_digits = get_dec_digits(job.realizations);
+    else real_dec_digits = 1;
 
     use_verbose = job.realizations > 1 || job.bop_par.min != job.bop_par.max;
 

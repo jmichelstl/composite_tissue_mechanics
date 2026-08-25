@@ -209,8 +209,6 @@ double calc_equilibrium_swelling(GelModel gmod, int max_steps){
     values.insert(values.end(), gmod.param_values.begin(), gmod.param_values.end());
     curr_val = evaluator_evaluate(f, count, &arg_names[0], &values[0]);
 
-    cout << "Reached here.\n";
-
     //Perform Newton's method searches
     steps = 0;
     do{
@@ -226,13 +224,9 @@ double calc_equilibrium_swelling(GelModel gmod, int max_steps){
         if(fabs(curr_val - prev_val) < TOL) break;
     } while(steps < max_steps && fabs(first_deriv) > TOL);
 
-    cout << "Reached here.\n";
-
     evaluator_destroy(f);
     evaluator_destroy(f_l);
     evaluator_destroy(f_ll);
-
-    cout << "Reached here.\n";
 
     return stretch;
 }
@@ -1168,8 +1162,6 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     }
 
     volume = (nmd.bounds[1]-nmd.bounds[0])*(nmd.bounds[3]-nmd.bounds[2])*(nmd.bounds[5]-nmd.bounds[4]);
-
-    cout << "Checkpoint 1.\n";
 
     //Find the equilibrium swollen state at the outset.
 

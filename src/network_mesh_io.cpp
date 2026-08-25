@@ -903,20 +903,13 @@ bool open_network_mesh_trajectory(string output, string nmc_file, double ks, dou
     fprintf(xml_handle, "\t\t<param name=\"stretch\" value=\"%1.10le\"/>\n",ks);
     fprintf(xml_handle, "\t\t<param name=\"bend\" value=\"%1.10le\"/>\n", kb);
 
-    cout << "Reached this point.\n";
-
-    printf("Parameter names: %lx\n", par_names);
-
     if(par_names){
         fprintf(xml_handle, "\t\t<GelModel function=\"%s\">\n", expr);
         for(int iter = 0; iter < par_values.size(); iter++){
-            printf("Parameter name: %s, Value: %1.10lf\n", par_names[iter], par_values[iter]);
             fprintf(xml_handle, "\t\t\t<param name=\"%s\" value=\"%1.10le\"/>\n", par_names[iter], par_values[iter]);
         }
         fprintf(xml_handle, "\t\t<GelModel/>\n");
     }
-
-    cout << "Reached this point.\n";
 
     fprintf(xml_handle, "\t</parameters>\n");
 

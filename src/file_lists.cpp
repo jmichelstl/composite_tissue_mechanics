@@ -4,6 +4,10 @@
 #include <boost/regex.hpp>
 #include "file_lists.hpp"
 #include <algorithm>
+#include <unistd.h>
+#include <stdlib.h>
+
+#define DEFAULT_BUF_SIZE 256
 
 using namespace std;
 using namespace boost::filesystem;
@@ -78,13 +82,14 @@ vector<string> split(string input, char delim){
 
 bool get_file_lists(string input, string tag, string extension, vector<string> &nmc_files, vector<string> &log_files, vector<string> &nmt_files, vector<string> &edat_files){
 
-	string dir_name, base_name, name;
+	string dir_name, base_name, curr_dir, name;
 	path p;
 	vector<string> tokens;
 	ostringstream oss, pattern;
 	boost::regex expr;
 	boost::smatch result;
 	int iter;
+    char *wd = NULL;
 
     if(input.compare("") == 0) return false;
 
@@ -111,15 +116,27 @@ bool get_file_lists(string input, string tag, string extension, vector<string> &
 	pattern << "^(" << base_name << ".*)" << "\\." << extension;
 	expr = boost::regex{pattern.str()};
 
+    //Find the current working directory
+    wd = getcwd(wd, 0); 
+    if(! wd){
+        cerr << "The current working directory could not be determined.\n";
+        return false;
+    }
+
+    oss.str("");
+    oss << string(wd) << "/";
+    curr_dir = oss.str();
+    free(wd);
+
 	if(exists(p)){
 		for(auto i=directory_iterator(p); i!=directory_iterator(); i++){
 			if(! is_directory(i->path())){
 				name = i->path().filename().string();
 				if(boost::regex_search(name, result, expr)){
 					nmc_files.push_back(get_nmc_name(result[0], dir_name));
-					log_files.push_back(get_log_name(result[1], dir_name, tag));
-					nmt_files.push_back(get_nmt_name(result[1],dir_name,tag));
-					edat_files.push_back(get_edat_name(result[1],dir_name,tag));
+					log_files.push_back(get_log_name(result[1], curr_dir, tag));
+					nmt_files.push_back(get_nmt_name(result[1],curr_dir,tag));
+					edat_files.push_back(get_edat_name(result[1],curr_dir,tag));
 				}
 			}
 		}
