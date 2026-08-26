@@ -877,7 +877,7 @@ void pk_j_contribution(double e_derivative, double def_grad[9], double pk_stress
 }
 
 //Find gel restoring forces in a serial manner.
-void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod, vector<double> &forces, int start, int end){
+void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel &gmod, vector<double> &forces, int start, int end){
 
     //Components of the deformation gradient tensor, and derivatives of the
     //gel elastic energy with respect to the deformation gradient tensor
@@ -957,7 +957,7 @@ void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_m
     }
 }
 
-void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod, vector<double> &forces, int start, int end){
+void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel &gmod, vector<double> &forces, int start, int end){
 
     //Components of the affine transformation matrix, derivatives of the
     //gel elastic energy with respect to the deformation gradient tensor
@@ -1208,24 +1208,37 @@ void gel_energy_worker(vector<double> pts, vector<int> tetrahedra, vector<double
     *energy += volumes[index] * evaluator_evaluate(gmod.energy_func, gmod.count, gmod.arg_names, &arguments[0]);
 }
 
-double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod){
+double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<GelModel> gmods, vector<int> gel_assignments){
 
-    vector<double> energies(tetrahedra.size() / 4, 0);
+    //vector<double> energies(tetrahedra.size() / 4, 0);
+    vector<double> energies(gel_assignments.size() - 1, 0);
+    tbb::task_group g;
+    double total = 0;
 
     //Compute energies in parallel
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, tetrahedra.size()/4),
+    for(int iter = 0; iter < gel_assignments.size() - 1; iter++){
+            g.run([pts, tetrahedra, inv_mats, volumes, &gmods, gel_assignments, &energies, iter]{
+               for(size_t index = gel_assignments[iter]; index != gel_assignments[iter+1]; index++){
+                   gel_energy_worker(pts, tetrahedra, inv_mats, volumes, gmods[iter], index, &energies[iter]);
+               }
+            });
+    }
+    g.wait();
+    /*tbb::parallel_for(tbb::blocked_range<size_t>(0, tetrahedra.size()/4),
         [&](const tbb::blocked_range<size_t>& r) {
             for(size_t index = r.begin(); index != r.end(); index++){
-               gel_energy_worker(pts, tetrahedra, inv_mats, volumes, gmod, index, &energies[index]);
+               gel_energy_worker(pts, tetrahedra, inv_mats, volumes, gmods, index, &energies[index]);
             }
         }
-    );
+    );*/
+
+    for(double next_val : energies) total += next_val;
+    return total;
 
     //Sum energies using a parallel reduction
-    return sum_reduce(&energies[0], &energies[0]+energies.size(), 0.);
+    //return sum_reduce(&energies[0], &energies[0]+energies.size(), 0.);
 }
 
-//void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, double g, double excess_osm, double kt_o_omega, double chi, int tet_idx, double *energy){
 void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod, int tet_idx, double *energy){
 
     //Components of the affine transformation matrix and an augmented 
@@ -1277,21 +1290,34 @@ void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vec
     *energy += volumes[tet_idx] * evaluator_evaluate(gmod.energy_func, gmod.count, gmod.arg_names, &arguments[0]);
 }
 
-double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod){
+double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, vector<GelModel> gmods, vector<int> gel_assignments){
 
-    vector<double> energies(tetrahedra.size() / 4, 0);
+    //vector<double> energies(tetrahedra.size() / 4, 0);
+    vector<double> energies(gel_assignments.size() - 1, 0);
+    tbb::task_group g;
+    double total = 0;
 
     //Compute energies in parallel
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, tetrahedra.size()/4),
+    for(int iter = 0; iter < gel_assignments.size() - 1; iter++){
+            g.run([&pts, tetrahedra, inv_mats, volumes, ref_pts, vertex_ranges, contained_vertices, &gmods, gel_assignments, &energies, iter]{
+               for(size_t index = gel_assignments[iter]; index != gel_assignments[iter+1]; index++){
+                   disjoint_gel_energy_worker(pts, tetrahedra, inv_mats, volumes, ref_pts, vertex_ranges, contained_vertices, gmods[iter], index, &energies[iter]);
+               }
+            });
+    }
+    g.wait();
+    /*tbb::parallel_for(tbb::blocked_range<size_t>(0, tetrahedra.size()/4),
         [&](const tbb::blocked_range<size_t>& r) {
             for(size_t index = r.begin(); index != r.end(); index++){
-                disjoint_gel_energy_worker(pts, tetrahedra, inv_mats, volumes, ref_pts, vertex_ranges, contained_vertices, gmod, index, &energies[index]);
+                disjoint_gel_energy_worker(pts, tetrahedra, inv_mats, volumes, ref_pts, vertex_ranges, contained_vertices, gmods, index, &energies[index]);
             }
         }
-    );
+    );*/
 
+    for(double next_val : energies) total += next_val;
+    return total;
     //Sum energies using a parallel reduction
-    return sum_reduce(&energies[0], &energies[0]+energies.size(), 0.);
+    //return sum_reduce(&energies[0], &energies[0]+energies.size(), 0.);
 }
 
 //Helper function for computation of restoring forces when the network vertices
@@ -1367,7 +1393,8 @@ void compute_forces_disjoint(NetworkMeshData &nmd, vector<double> &forces){
 }
 
 //Helper functions to handle parallel force computation
-void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
+//void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
+void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets){
 
     int iter, num_dof;
 
@@ -1393,27 +1420,27 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &force
     tbb::task_group g;
 
     if(nmd.ks > 0){
-        for(iter = 0; iter < stretch_assignments.size() - 1; iter++){
-            g.run([nmd, &force_sets, stretch_assignments, iter]{
-                stretching_forces(nmd.points, nmd.edges, nmd.lengths, nmd.ks, force_sets[iter], stretch_assignments[iter], stretch_assignments[iter+1]);
+        for(iter = 0; iter < nmd.stretch_assignments.size() - 1; iter++){
+            g.run([nmd, &force_sets, iter]{
+                stretching_forces(nmd.points, nmd.edges, nmd.lengths, nmd.ks, force_sets[iter], nmd.stretch_assignments[iter], nmd.stretch_assignments[iter+1]);
             });
         }
         g.wait();
     }
 
     if(nmd.kb > 0){
-        for(iter = 0; iter < bend_assignments.size() - 1; iter++){
-            g.run([nmd, &force_sets, bend_assignments, iter]{
-                bending_forces(nmd.points, nmd.triples, nmd.angles, nmd.kb, force_sets[iter], bend_assignments[iter], bend_assignments[iter+1]);
+        for(iter = 0; iter < nmd.bend_assignments.size() - 1; iter++){
+            g.run([nmd, &force_sets, iter]{
+                bending_forces(nmd.points, nmd.triples, nmd.angles, nmd.kb, force_sets[iter], nmd.bend_assignments[iter], nmd.bend_assignments[iter+1]);
             });
         }
         g.wait();
     }
 
     if(nmd.tetrahedra.size()){
-        for(iter = 0; iter < gel_assignments.size() - 1; iter++){
-            g.run([nmd, &force_sets, gel_assignments, iter]{
-                gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.gmod, force_sets[iter], gel_assignments[iter], gel_assignments[iter+1]);
+        for(iter = 0; iter < nmd.gel_assignments.size() - 1; iter++){
+            g.run([&nmd, &force_sets, iter]{
+                gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.model_copies[iter], force_sets[iter], nmd.gel_assignments[iter], nmd.gel_assignments[iter+1]);
             });
         }
         g.wait();
@@ -1436,7 +1463,8 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &force
 
 }
 
-void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
+//void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments){
+void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets){
 
     int iter, num_dof;
     cholmod_dense *net_forces, *net_contribution;
@@ -1452,25 +1480,25 @@ void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forc
         cblas_dscal(num_dof, 0, &force_sets[iter][0], 1);
     }
 
-    for(iter = 0; iter < gel_assignments.size() - 1; iter ++){
-        g.run([&nmd, &force_sets, gel_assignments, iter]{
-            gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.gmod, force_sets[iter], gel_assignments[iter], gel_assignments[iter+1]);
+    for(iter = 0; iter < nmd.gel_assignments.size() - 1; iter ++){
+        g.run([&nmd, &force_sets, iter]{
+            gel_forces_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.model_copies[iter], force_sets[iter], nmd.gel_assignments[iter], nmd.gel_assignments[iter+1]);
         });
     }
 
     if(nmd.ks > 0){
-        for(iter = 0; iter < stretch_assignments.size() - 1; iter++){
-            g.run([nmd, &force_sets, stretch_assignments, iter]{
-                stretching_forces_disjoint(nmd.points, nmd.edges, nmd.lengths, nmd.stretching_constants, force_sets[iter], stretch_assignments[iter], stretch_assignments[iter+1]);
+        for(iter = 0; iter < nmd.stretch_assignments.size() - 1; iter++){
+            g.run([nmd, &force_sets, iter]{
+                stretching_forces_disjoint(nmd.points, nmd.edges, nmd.lengths, nmd.stretching_constants, force_sets[iter], nmd.stretch_assignments[iter], nmd.stretch_assignments[iter+1]);
             });
         }
         g.wait();
     }
 
     if(nmd.kb > 0){
-        for(iter = 0; iter < bend_assignments.size() - 1; iter++){
-            g.run([nmd, &force_sets, bend_assignments, iter]{
-                bending_forces_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants, force_sets[iter], bend_assignments[iter], bend_assignments[iter+1]);
+        for(iter = 0; iter < nmd.bend_assignments.size() - 1; iter++){
+            g.run([nmd, &force_sets, iter]{
+                bending_forces_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants, force_sets[iter], nmd.bend_assignments[iter], nmd.bend_assignments[iter+1]);
             });
         }
         g.wait();

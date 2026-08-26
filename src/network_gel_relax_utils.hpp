@@ -22,6 +22,7 @@
 #include <nlohmann/json.hpp>
 #include <matheval.h>
 #include <iostream>
+#include <assert.h>
 
 using namespace std;
 using json = nlohmann::json;
@@ -54,6 +55,52 @@ struct GelModel {
         initialized = false;
         energy_func = NULL;
         arg_names = NULL;
+    }
+
+    //Copy constructor to allow duplicates when parallel force and energy
+    //calculations are to be performed
+    void replicate(GelModel &other){
+
+        char *func_string;
+        int length, iter;
+
+        if(! other.initialized){
+            initialized = false;
+            energy_func = NULL;
+            arg_names = NULL;
+            return;
+        }
+
+        count = other.count;
+
+        //Duplicate the energy function
+        func_string = evaluator_get_string(other.energy_func);
+        energy_func = evaluator_create(func_string);
+        assert(energy_func);
+
+        //Duplicate the list of argument names
+        arg_names = (char **) malloc(sizeof(char *) * count);
+        for(iter = 0; iter < count; iter ++){
+            length = strlen(other.arg_names[iter]) + 1;
+            arg_names[iter] = (char *) malloc(sizeof(char) * length);
+            strcpy(arg_names[iter], other.arg_names[iter]);
+        }
+
+        //Duplicate the list of derivatives w.r.t. principal invariants
+        for(iter = 0; iter < other.energy_derivatives.size(); iter ++){
+            func_string = evaluator_get_string(other.energy_derivatives[iter]);
+            energy_derivatives.push_back(evaluator_create(func_string));
+            assert(energy_derivatives[iter]);
+        }
+
+        //Duplicate lists of function pointers to compute principal invariants
+        //and contributions to the Piola-Kirchoff stress tesnor
+        inv_funcs.assign(other.inv_funcs.begin(),other.inv_funcs.end());
+        pk_funcs.assign(other.pk_funcs.begin(),other.pk_funcs.end());
+
+        param_values.assign(other.param_values.begin(), other.param_values.end());
+
+        initialized = true;
     }
 
     bool initialize(json gel_block){
@@ -167,8 +214,8 @@ struct GelModel {
 
         for(iter = 0; iter < count; iter ++){
             free(arg_names[iter]);
-            free(arg_names);
         }
+        free(arg_names);
 
         param_values.clear();
 
@@ -247,6 +294,15 @@ struct NetworkMeshData {
     double ks, kb;
     GelModel gmod;
 
+    //This field is only used when parallel force and energy calculations
+    //are performed, and is needed in such cases because the libmatheval
+    //library is not thread safe.
+    vector<GelModel> model_copies;
+
+    //These fields are used to divide work among threads when parallel
+    //force and energy force calculations are desired.
+    vector<int> stretch_assignments, bend_assignments, gel_assignments;
+
     //Fields needed for disjoint network-mesh complexes
     //These are ignored if the network vertices are a subset of the mesh
     //vertices.
@@ -317,24 +373,26 @@ double parallel_fiber_bending_energy(vector<double> points, vector<int> triples,
 
 double parallel_fiber_bending_energy_disjoint(vector<double> points, vector<int> triples,vector<double> angles, vector<double> constants);
 
-void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod, vector<double> &forces, int start, int end);
+void gel_forces(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel &gmod, vector<double> &forces, int start, int end);
 
-void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod, vector<double> &forces, int start, int end);
+void gel_forces_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel &gmod, vector<double> &forces, int start, int end);
 
 double calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod);
 
 double calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod);
 
-double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, GelModel gmod);
+double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<GelModel> gmods, vector<int> gel_assignments);
 
-double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod);
+double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, vector<GelModel> gmods, vector<int> gel_assignments);
 
 void compute_forces_unified(NetworkMeshData &nmd, vector<double> &forces);
 
 void compute_forces_disjoint(NetworkMeshData &nmd, vector<double> &forces);
 
-void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
+//void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
+void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets);
 
-void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
+//void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
+void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets);
 
 #endif
