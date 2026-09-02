@@ -11,6 +11,7 @@
 #include <set>
 #include <cfloat>
 #include "nmbvh.hpp"
+#include <metis.h>
 
 #define PTS_PER_BOX 8
 
@@ -402,6 +403,117 @@ void LatticeBasedNMC::tetrahedralize(){
     triples = out_triples;
 }
 
+//Create a undirected graph in which edges represent pairs of vertices belonging
+//to the same tetrahedron and perform a fill-reducing ordering of the associated
+//adjacency matrix.
+void LatticeBasedNMC::refine_topology(){
+
+    int iter, i, j, result, idx1, idx2, idx3;
+    idx_t npts, total;
+    set<IdxPair> vertex_pairs;
+    map<int, vector<idx_t>> adj_lists;
+    idx_t options[METIS_NOPTIONS];
+    vector<idx_t> xadj, adjncy, perm, iperm;
+    vector<double> permuted_points;
+    vector<edge> permuted_edges;
+    vector<triple> permuted_triples;
+
+    //Construct adjacency lists
+    npts = points.size() / 3;
+    for(iter = 0; iter < npts; iter ++){
+        adj_lists.insert(make_pair(iter, vector<int>()));
+    }
+
+    //If there is a tetrahedralization, enumerate distinct pairs of vertices
+    //within the mesh
+    if(tetrahedra.size()){
+        for(iter = 0; iter < tetrahedra.size(); iter += 4){
+            for(i = 0; i < 3; i ++){
+                idx1 = iter + i;
+                for(j = i + 1; j < 4; j ++){
+                    idx2 = iter + j;
+                    vertex_pairs.insert(IdxPair(idx1, idx2));
+                }
+            }
+        }
+        for(IdxPair vpair : vertex_pairs){
+            adj_lists[vpair.idx1].push_back(idx2);
+            adj_lists[vpair.idx2].push_back(idx1);
+        }
+    }
+    else if(edges.size()) {
+        for(iter = 0; iter < edges.size(); iter ++){
+            idx1 = get<0>(edges[iter]);
+            idx2 = get<0>(edges[iter]);
+            adj_lists[idx1].push_back(idx2);
+            adj_lists[idx2].push_back(idx1);
+        }
+    }
+
+    else {
+        cerr << "Neither tetrahedra nor edges are defined.\n";
+        return;
+    }
+
+    //Build a compressed adjacency list representation for use with METIS
+    total = 0;
+    xadj.push_back(total);
+    for(iter = 0; iter < npts; iter ++){
+        total += adj_lists[iter].size();
+        xadj.push_back(total);
+        adjncy.insert(adjncy.end(), adj_lists[iter].begin(), adj_lists[iter].end());
+    }
+
+    //Compute the fill-reducing ordering and apply the permutation to
+    //vertices, edges, triples and tetrahedra
+    METIS_SetDefaultOptions(options);
+    options[METIS_OPTION_NUMBERING] = 0;
+
+    perm.assign(npts, 0);
+    iperm.assign(npts, 0);
+    result = METIS_NodeND(&npts, &xadj[0], &adjncy[0], NULL, options, &perm[0], &iperm[0]);
+    if(result != METIS_OK){
+        cerr << "Reordering of the mesh topology failed.\n";
+        exit(result);
+    }
+
+    //Vertices
+    for(iter = 0; iter < npts; iter ++){
+        permuted_points.push_back(3*perm[iter]);
+        permuted_points.push_back(3*perm[iter] + 1);
+        permuted_points.push_back(3*perm[iter] + 2);
+    }
+    points = permuted_points;
+
+    //Edges
+    if(edges.size()){
+        for(iter = 0; iter < edges.size(); iter ++){
+            idx1 = get<0>(edges[iter]);
+            idx2 = get<1>(edges[iter]);
+            permuted_edges.push_back(make_tuple(iperm[idx1], iperm[idx2]));
+        }
+        edges = permuted_edges;
+    }
+
+    //Triples
+    if(triples.size()){
+        for(iter = 0; iter < triples.size(); iter ++){
+            idx1 = get<0>(triples[iter]);
+            idx2 = get<1>(triples[iter]);
+            idx3 = get<2>(triples[iter]);
+            permuted_triples.push_back(make_tuple(iperm[idx1],iperm[idx2],iperm[idx3]));
+        }
+        triples = permuted_triples;
+    }
+
+    //Tetrahedra
+    if(tetrahedra.size()){
+        for(iter = 0; iter < tetrahedra.size(); iter ++){
+            tetrahedra[iter] = iperm[tetrahedra[iter]];
+        }
+    }
+}
+
 inline void create_face_simple(double lc, double s1, double s2, Vec3D center, Vec3D v1, Vec3D v2, map<Vec3D, int> &pmap, map<pair<int, int>, int> &emap, vector<int> &tags){
 
     int iter, idx1, idx2, edge_idx;
@@ -587,6 +699,148 @@ void RandomNMCBase::tetrahedralize(){
         point_in_tet_ranges.push_back(end);
         point_in_tet_records.insert(point_in_tet_records.end(), m_iter->second.begin(), m_iter->second.end());
     }
+}
+
+//Apply fill-reducing orderings to connectivity graphs for both the edges and
+//tetrahedra of the NMC.
+void RandomNMCBase::refine_topology(){
+
+    int iter, i, j, idx1, idx2, idx3, result;
+    idx_t npts, total;
+    set<IdxPair> vertex_pairs;
+    map<int, vector<idx_t>> adj_lists;
+    idx_t options[METIS_NOPTIONS];
+    vector<idx_t> xadj, adjncy, perm, iperm;
+    vector<double> permuted_points;
+    vector<edge> permuted_edges;
+    vector<triple> permuted_triples;
+
+    METIS_SetDefaultOptions(options);
+    options[METIS_OPTION_NUMBERING] = 0;
+
+    //First refine the topology of the fiber network
+    if(edges.size()) {
+
+        npts = num_net_verts;
+
+        //Set up adjacency lists
+        for(iter = 0; iter < npts; iter ++){
+            adj_lists.insert(make_pair(iter, vector<idx_t>()));
+        }
+        for(iter = 0; iter < edges.size(); iter += 2){
+            idx1 = get<0>(edges[iter]);
+            idx2 = get<1>(edges[iter]);
+            adj_lists[idx1].push_back(idx2);
+            adj_lists[idx2].push_back(idx1);
+        }
+
+        //Build a compressed adjacency list representation for use with METIS
+        total = 0;
+        xadj.push_back(total);
+        for(iter = 0; iter < npts; iter ++){
+            total += adj_lists[iter].size();
+            xadj.push_back(total);
+            adjncy.insert(adjncy.end(), adj_lists[iter].begin(), adj_lists[iter].end());
+        }
+
+        //Compute the fill-reducing ordering and apply the permutation to
+        //vertices, edges, and triples
+        perm.assign(npts, 0);
+        iperm.assign(npts, 0);
+        result = METIS_NodeND(&npts, &xadj[0], &adjncy[0], NULL, options, &perm[0], &iperm[0]);
+        if(result != METIS_OK){
+            cerr << "Reordering of the mesh topology failed.\n";
+            exit(result);
+        }
+
+        //Vertices
+        for(iter = 0; iter < npts; iter ++){
+            permuted_points.push_back(3*perm[iter]);
+            permuted_points.push_back(3*perm[iter] + 1);
+            permuted_points.push_back(3*perm[iter] + 2);
+        }
+
+        //Edges
+        for(iter = 0; iter < edges.size(); iter ++){
+            idx1 = get<0>(edges[iter]);
+            idx2 = get<1>(edges[iter]);
+            permuted_edges.push_back(make_tuple(iperm[idx1], iperm[idx2]));
+        }
+        edges = permuted_edges;
+
+        //Triples
+        if(triples.size()){
+            for(iter = 0; iter < triples.size(); iter ++){
+                idx1 = get<0>(triples[iter]);
+                idx2 = get<1>(triples[iter]);
+                idx3 = get<2>(triples[iter]);
+                permuted_triples.push_back(make_tuple(iperm[idx1],iperm[idx2],iperm[idx3]));
+            }
+            triples = permuted_triples;
+        }
+    }
+
+    //Refine the tetrahedral topology
+    if(tetrahedra.size()){
+        for(iter = 0; iter < tetrahedra.size(); iter += 4){
+            for(i = 0; i < 3; i ++){
+                idx1 = iter + i - num_net_verts;
+                for(j = i + 1; j < 4; j ++){
+                    idx2 = iter + j - num_net_verts;
+                    vertex_pairs.insert(IdxPair(idx1, idx2));
+                }
+            }
+        }
+
+        adj_lists.clear();
+        npts = points.size() / 3 - num_net_verts;
+        for(iter = 0; iter < npts; iter ++){
+            adj_lists.insert(make_pair(iter, vector<idx_t>()));
+        }
+        for(IdxPair vpair : vertex_pairs){
+            adj_lists[vpair.idx1].push_back(idx2);
+            adj_lists[vpair.idx2].push_back(idx1);
+        }
+
+        //Build a compressed adjacency list representation for use with METIS
+        total = 0;
+        xadj.clear();
+        xadj.push_back(total);
+        for(iter = 0; iter < npts; iter ++){
+            total += adj_lists[iter].size();
+            xadj.push_back(total);
+            adjncy.insert(adjncy.end(), adj_lists[iter].begin(), adj_lists[iter].end());
+        }
+
+        //Compute the fill-reducing ordering and apply the permutation to
+        //vertices, edges, triples and tetrahedra
+        METIS_SetDefaultOptions(options);
+        options[METIS_OPTION_NUMBERING] = 0;
+
+        perm.assign(npts, 0);
+        iperm.assign(npts, 0);
+        result = METIS_NodeND(&npts, &xadj[0], &adjncy[0], NULL, options, &perm[0], &iperm[0]);
+        if(result != METIS_OK){
+            cerr << "Reordering of the mesh topology failed.\n";
+            exit(result);
+        }
+
+        //Vertices
+        for(iter = 0; iter < npts; iter ++){
+            permuted_points.push_back(3*(perm[iter] + num_net_verts));
+            permuted_points.push_back(3*(perm[iter] + num_net_verts) + 1);
+            permuted_points.push_back(3*(perm[iter] + num_net_verts) + 2);
+        }
+
+        //Tetrahedra
+        if(tetrahedra.size()){
+            for(iter = 0; iter < tetrahedra.size(); iter ++){
+                tetrahedra[iter] = iperm[tetrahedra[iter]] + num_net_verts;
+            }
+        }
+    }
+
+    points = permuted_points;
 }
 
 //After dilution, determine which points are retained in the network, and which
@@ -846,6 +1100,37 @@ void NetworkMeshComplex::random_dilute(double p){
 	edges = reduced_edges;
     triples = reduced_triples;
     angles = reduced_angles;
+}
+
+void NetworkMeshComplex::refine_toplogy(){}
+
+//Break edges in the network into a specified number of sub-segments to
+//provide more points at which fibers can flex
+void NetworkMeshComplex::add_hinges(int num_segments){
+
+    vector<edge> new_edges;
+    int idx1, idx2, prev_idx, curr_idx, iter;
+    Vec3D v1, v2, new_vertex, prev_vertex;
+    double t;
+
+    for(edge e : edges){
+        idx1 = get<0>(e);
+        idx2 = get<1>(e);
+
+        assign(v1, points, idx1);
+        assign(v2, points, idx2);
+
+        prev_idx = idx1;
+        for(iter = 1; iter < num_segments; iter ++){
+            t = (double) iter / num_segments;
+            curr_idx = points.size() / 3;
+            points.push_back(v1.x*(1.-t) + v2.x*t);
+            points.push_back(v1.y*(1.-t) + v2.y*t);
+            points.push_back(v1.z*(1.-t) + v2.z*t);
+            edges.push_back(make_tuple(prev_idx, curr_idx));
+            prev_idx = curr_idx;
+        }
+    }
 }
 
 //This function is similar to the one above, but addresses the need to update

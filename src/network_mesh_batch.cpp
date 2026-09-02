@@ -13,6 +13,7 @@
 #include <cmath>
 #include <sstream>
 #include <cfloat>
+#include <unistd.h>
 
 using namespace std;
 
@@ -124,15 +125,28 @@ struct BOPParams {
 //Type to organize a set of instructions for a batch of network-mesh complexes
 struct NMCJob {
 
-    NMCJob(){}
+    NMCJob(){
+        refine = false;
+    }
 
+    //Target maximum mesh volume
     double max_vol;
+    //Bounds of the axis-aligned rectangular prism to be filled
     Bounds3D bounds;
+    //General type of network construction to use
     construction_type ctype;
+    //Details of the network construction protocol
     shared_ptr<ConstructParams> constr_par;
+    //Range of bond occupation probabilities
     BOPParams bop_par;
+    //Number of realizations to create for a set of parameters
     int realizations;
+    //Base name to be used in output
     string base_name;
+    //Whether or not to perform topological refinement
+    bool refine;
+    //Number of segments into which edges should be partitioned - default is 1
+    int num_segments;
 };
 
 //Parse bounds
@@ -178,7 +192,7 @@ vector<string> split(string input, char delim){
 }
 
 //Parse the construction protocol
-bool parse_construction(string line, construction_type &ct, shared_ptr<ConstructParams> &con_ptr){
+bool parse_construction(string line, construction_type &ct, shared_ptr<ConstructParams> &con_ptr, int &segments){
 
     point_process pt_proc;
     point_decorations dec;
@@ -206,6 +220,14 @@ bool parse_construction(string line, construction_type &ct, shared_ptr<Construct
 
         con_ptr = make_shared<LatticeBasedParams>(tokens[1], scale);
         ct = construction_type::lattice;
+
+        if(tokens.size() >= 4){
+            if(!(num_read=sscanf(tokens[3].c_str(),"%d",&segments))||segments<1){
+                cerr << "The optional segment number argument should be a positive integer.\n";
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -239,6 +261,14 @@ bool parse_construction(string line, construction_type &ct, shared_ptr<Construct
 
         con_ptr = make_shared<OffLatticeParams>(pt_proc, dec, density);
         ct = construction_type::off;
+
+        if(tokens.size() >= 5){
+            if(!(num_read=sscanf(tokens[4].c_str(),"%d",&segments))||segments<1){
+                cerr << "The optional segment number argument should be a positive integer.\n";
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -340,7 +370,7 @@ bool parse_nmc_batch_file(string file_name, NMCJob &job){
     construction_type ct;
     shared_ptr<ConstructParams> con_ptr;
     BOPParams bpar;
-    int num_read, realizations;
+    int num_read, realizations, segments = 1;
 
     batch_file.open(file_name);
 
@@ -367,7 +397,7 @@ bool parse_nmc_batch_file(string file_name, NMCJob &job){
                 state = nmc_parser_state::construction;
                 break;
             case nmc_parser_state::construction :
-                if(! parse_construction(nextline, ct, con_ptr)){
+                if(! parse_construction(nextline, ct, con_ptr, segments)){
                     cerr << "Parsing of construction protocol failed.\n";
                     batch_file.close();
                     return false;
@@ -425,6 +455,7 @@ bool parse_nmc_batch_file(string file_name, NMCJob &job){
     job.max_vol = max_vol;
     job.realizations = realizations;
     job.base_name = base_name;
+    job.num_segments = segments;
 
     return true;
 }
@@ -497,7 +528,9 @@ void lattice_based_batch(NMCJob job, bool use_verbose, int real_dec_digits){
             if(bop < 1){
                 lbnmc_copy->random_dilute(bop);
             }
+            if(job.num_segments > 1) lbnmc_copy->add_hinges(job.num_segments);
             if(job.max_vol > 0) lbnmc_copy->tetrahedralize();
+            if(job.refine) lbnmc_copy->refine_topology();
             report_network_mesh_complex((char *) output_name.c_str(), lbnmc_copy);
         }
     }
@@ -531,12 +564,15 @@ void off_lattice_batch(NMCJob job, bool use_verbose, int real_dec_digits){
                 if(bop < 1){
                     rpnmc->random_dilute(bop);
                 }
+                if(job.num_segments > 1) rpnmc->add_hinges(job.num_segments);
 
                 if(job.max_vol > 0){
                     rpnmc->tetrahedralize();
+                    if(job.refine) rpnmc->refine_topology();
                     report_disjoint_network_mesh_complex((char *) output_name.c_str(), rpnmc);
                 }
                 else{
+                    if(job.refine) rpnmc->refine_topology();
                     report_network_mesh_complex((char *) output_name.c_str(), rpnmc);
                 }
             }
@@ -553,14 +589,37 @@ int main(int argc, char **argv){
     int iter, real_dec_digits;
     double bop;
     bool use_verbose;
-    string output_name;
+    string batch_file, output_name;
+    char c;
 
-    if(argc < 2){
-        cerr << "Usage: NMC batch file\n";
-        return 1;
+    while((c = getopt(argc, argv, "b:r")) != -1){
+        switch(c){
+            //Obtain the batch file
+            case 'b':
+                batch_file = string(optarg);
+                break;
+            //Perform topology refinement
+            case 'r':
+                job.refine = true;
+                break;
+            case '?' :
+                if(optopt == 'b'){
+                    cerr << "Option \"b\" requires a file name.\n";
+                    return -1;
+                }
+                else if(isprint(optopt)){
+                    fprintf(stderr, "Unrecognized option: %c\n", optopt);
+                }
+                else{
+                    cerr << stderr, "Unknown option character.\n";
+                }
+                break;
+            default:
+                break;
+        }
     }
 
-    if(! parse_nmc_batch_file(string(argv[1]), job)){
+    if(! parse_nmc_batch_file(batch_file, job)){
         cerr << "The batch file could not be successfully parsed.\n";
         return 2;
     }
@@ -571,10 +630,11 @@ int main(int argc, char **argv){
     use_verbose = job.realizations > 1 || job.bop_par.min != job.bop_par.max;
 
     if(job.ctype == construction_type::lattice){
-        lattice_based_batch( job, use_verbose, real_dec_digits);
+        lattice_based_batch(job, use_verbose, real_dec_digits);
     }
 
     else{
+        //Prepare exact geometric predicate data structures
         exactinit();
         off_lattice_batch(job, use_verbose, real_dec_digits);
     }

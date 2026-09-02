@@ -34,17 +34,17 @@ using json = nlohmann::json;
 //(disjoint)
 enum class nmc_type {unified, disjoint};
 
-double compute_i1(double def_grad[9]);
+double compute_i1(double *def_grad);
 
-double compute_i2(double def_grad[9]);
+double compute_i2(double *def_grad);
 
-double compute_j(double def_grad[9]);
+double compute_j(double *def_grad);
 
-void pk_i1_contribution(double e_derivative, double def_grad[9], double pk_stress[9]);
+void pk_i1_contribution(double e_derivative, double *def_grad, double *pk_stress);
 
-void pk_i2_contribution(double e_derivative, double def_grad[9], double pk_stress[9]);
+void pk_i2_contribution(double e_derivative, double *def_grad, double *pk_stress);
 
-void pk_j_contribution(double e_derivative, double def_grad[9], double pk_stress[9]);
+void pk_j_contribution(double e_derivative, double *def_grad, double *pk_stress);
 
 
 //Struct to hold the data needed to describe the model of the gel deformation
@@ -238,11 +238,11 @@ struct GelModel {
     vector<void *> energy_derivatives;
 
     //Function pointers to compute each required principle invariant
-    vector<double(*)(double def_grad[9])> inv_funcs;
+    vector<double(*)(double *def_grad)> inv_funcs;
 
     //Function pointers to compute components of the first Piola-Kirchoff stress
     //tensor
-    vector<void(*)(double e_deriv, double def_grad[9], double pk_stress[9])> pk_funcs;
+    vector<void(*)(double e_deriv, double *def_grad, double *pk_stress)> pk_funcs;
 
     //Names of arguments to the energy density function and its derivatives
     //and model parameter values
@@ -253,9 +253,17 @@ struct GelModel {
 //Data structre to hold information pertaining structural relaxation
 struct NetworkMeshData {
 
-    NetworkMeshData(){}
+    NetworkMeshData(){
+        invariants = NULL;
+        def_grads = NULL;
+        pk_tensors = NULL;
+    }
 
-    NetworkMeshData(nmc_type my_type) : type(my_type) {}
+    NetworkMeshData(nmc_type my_type) : type(my_type) {
+        invariants = NULL;
+        def_grads = NULL;
+        pk_tensors = NULL;
+    }
 
     //If the network is not lattice based and has bond of varying length,
     //different stretching and bending constants will be needed, in general,
@@ -302,6 +310,10 @@ struct NetworkMeshData {
     //These fields are used to divide work among threads when parallel
     //force and energy force calculations are desired.
     vector<int> stretch_assignments, bend_assignments, gel_assignments;
+    //Principal scalar invariants, deformation gradient tensors, and First
+    //Piola-Kirchoff stress tensors, used to expose more parallelism.
+    //vector<double> invariants, def_grads, pk_tensors;
+    double *invariants, *def_grads, *pk_tensors;
 
     //Fields needed for disjoint network-mesh complexes
     //These are ignored if the network vertices are a subset of the mesh
@@ -381,9 +393,11 @@ double calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double
 
 double calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, GelModel gmod);
 
-double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<GelModel> gmods, vector<int> gel_assignments);
+//double parallel_calc_gel_energy(vector<double> pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<GelModel> gmods, vector<int> gel_assignments);
+double parallel_calc_gel_energy(NetworkMeshData &nmd);
 
-double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, vector<GelModel> gmods, vector<int> gel_assignments);
+//double parallel_calc_gel_energy_disjoint(vector<double> &pts, vector<int> tetrahedra, vector<double> inv_mats, vector<double> volumes, vector<double> ref_pts, vector<int> vertex_ranges, vector<int> contained_vertices, vector<GelModel> gmods, vector<int> gel_assignments);
+double parallel_calc_gel_energy_disjoint(NetworkMeshData &nmd);
 
 void compute_forces_unified(NetworkMeshData &nmd, vector<double> &forces);
 

@@ -773,7 +773,8 @@ double total_energy_up(NetworkMeshData &nmd){
     }
 
     if(nmd.tetrahedra.size() > 0){
-        energy += parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.model_copies, nmd.gel_assignments);
+        //energy += parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.model_copies, nmd.gel_assignments);
+        energy += parallel_calc_gel_energy(nmd);
     }
 
     return energy;
@@ -785,7 +786,8 @@ double total_energy_dp(NetworkMeshData &nmd){
 
     double energy;
 
-    energy = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.model_copies, nmd.gel_assignments);
+    //energy = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.model_copies, nmd.gel_assignments);
+    energy = parallel_calc_gel_energy_disjoint(nmd);
 
     if(nmd.ks > 0 && nmd.edges.size() > 0){
         energy += parallel_stretching_energy_disjoint(nmd.points, nmd.edges, nmd.lengths, nmd.stretching_constants);
@@ -1060,7 +1062,8 @@ void itemized_energy_up(NetworkMeshData &nmd, double &estretch, double &ebend, d
     }
 
     if(nmd.tetrahedra.size() > 0){
-        egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.model_copies, nmd.gel_assignments);
+        //egel = parallel_calc_gel_energy(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.model_copies, nmd.gel_assignments);
+        egel = parallel_calc_gel_energy(nmd);
     }
 }
 
@@ -1079,7 +1082,8 @@ void itemized_energy_dp(NetworkMeshData &nmd, double &estretch, double &ebend, d
         ebend = parallel_fiber_bending_energy_disjoint(nmd.points, nmd.triples, nmd.angles, nmd.bending_constants);
     }
 
-    egel = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.model_copies, nmd.gel_assignments);
+    //egel = parallel_calc_gel_energy_disjoint(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.reference_points, nmd.vertex_ranges, nmd.contained_vertices, nmd.model_copies, nmd.gel_assignments);
+    egel = parallel_calc_gel_energy_disjoint(nmd);
 }
 
 //Direct a course of deformation and structural relaxation. Given the specified
@@ -1114,8 +1118,9 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     nmd.gmod = gmod;
 
     //If multithreaded force and energy calulations are needed, make copies
-    //of the gel model to avoid data races, and determine how force computation
-    //labor should be divided.
+    //of the gel model to avoid data races, determine how force computation
+    //labor should be divided, and create workspace for parallel computation
+    //of deformation gradient tensors and Piola-Kirchoff stress tensors.
     if(threads > 1){
         if(gmod.initialized){
             for(i = 0; i < threads; i++){
@@ -1126,6 +1131,13 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
         nmd.stretch_assignments = job_assignments(nmd.edges.size()/2, threads);
         nmd.bend_assignments = job_assignments(nmd.triples.size()/3,  threads);
         nmd.gel_assignments = job_assignments(nmd.tetrahedra.size()/4, threads);
+
+        nmd.invariants = (double *) malloc(gmod.inv_funcs.size()*nmd.tetrahedra.size()/4*sizeof(double));
+        nmd.def_grads = (double *) malloc(9*nmd.tetrahedra.size()/4*sizeof(double));
+        nmd.pk_tensors = (double *) malloc(9*nmd.tetrahedra.size()/4*sizeof(double));
+        /*nmd.invariants.assign(gmod.inv_funcs.size()*nmd.tetrahedra.size()/4, 0);
+        nmd.def_grads.assign(9*nmd.tetrahedra.size()/4, 0);
+        nmd.pk_tensors.assign(9*nmd.tetrahedra.size()/4, 0);*/
     }
 
     //Attempt to open a log file
@@ -1412,6 +1424,9 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     //with copies of the gel constitutive model data structure
     if(threads > 1 && gmod.initialized){
         for(i = 0; i < threads; i++) nmd.model_copies[i].clear();
+        free(nmd.invariants);
+        free(nmd.def_grads);
+        free(nmd.pk_tensors);
     }
 }
 

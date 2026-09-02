@@ -30,7 +30,15 @@ class NetworkMeshComplex {
 
         virtual bool build_network(){return true;}
 
+        //Retain each edge with probability p
         void random_dilute(double p);
+
+        //Partition edges into a specified number of segments
+        void add_hinges(int num_segments);
+
+        //Use the METIS fill-reducing ordering procedure to permute network
+        //network vertices.
+        virtual void refine_toplogy();
 
         virtual void tetrahedralize();
 
@@ -111,6 +119,8 @@ class LatticeBasedNMC : public NetworkMeshComplex {
 
         void tetrahedralize();
 
+        void refine_topology();
+
     protected:
         //Compute triples by finding pairs of consecutive, parallel line
         //segments.
@@ -139,6 +149,8 @@ class RandomNMCBase : public NetworkMeshComplex {
         void tetrahedralize();
 
         void random_dilute(double p);
+
+        void refine_topology();
 
         vector<int> get_tet_ranges(){
             return point_in_tet_ranges;
