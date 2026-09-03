@@ -1,8 +1,6 @@
 #include "network_gel_relax_utils.hpp"
 #include <cfloat>
 #include <iostream>
-#include <time.h>
-#include <thread>
 
 //Utility function for the parallel summation of arrays
 template <typename T> T sum_reduce(const T* first, const T* last, T identity){
@@ -1305,12 +1303,8 @@ double parallel_calc_gel_energy_disjoint(NetworkMeshData &nmd){
 void compute_forces_unified(NetworkMeshData &nmd, vector<double> &forces){
 
     cblas_dscal(forces.size(), 0, &forces[0], 1);
-    clock_t ct;
 
-    ct = clock();
     gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.gmod, forces, 0, nmd.tetrahedra.size() / 4);
-    ct = clock() - ct;
-    cout << ((double ) ct) / CLOCKS_PER_SEC << endl;
 
     if(nmd.ks > 0){
         stretching_forces(nmd.points, nmd.edges, nmd.lengths, nmd.ks, forces, 0, nmd.edges.size()/2);
@@ -1380,7 +1374,6 @@ void compute_forces_disjoint(NetworkMeshData &nmd, vector<double> &forces){
 void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets){
 
     int iter, num_dof;
-    clock_t ct;
 
     num_dof = forces.size();
 
@@ -1426,30 +1419,18 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &force
 
     //Compute gel forces
     if(nmd.tetrahedra.size()){
-<<<<<<< HEAD
-        ct = clock();
-=======
->>>>>>> bfb8820 (I fixed a few glitches and added my version of the classic Shewchuck code for robust geometric predicates, which I modified only to modernize function declarations to avoid compiler warnings.)
         for(iter = 0; iter < nmd.gel_assignments.size() - 1; iter++){
             g.run([&nmd, iter, &force_sets]{
                 gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.model_copies[iter], force_sets[iter], nmd.gel_assignments[iter], nmd.gel_assignments[iter+1]);
             });
         }
         g.wait();
-        ct = clock() - ct;
-        cout << "Stage 3: " << ((double) ct) / CLOCKS_PER_SEC << endl;
     }
 
-<<<<<<< HEAD
-    ct = clock();
-=======
->>>>>>> bfb8820 (I fixed a few glitches and added my version of the classic Shewchuck code for robust geometric predicates, which I modified only to modernize function declarations to avoid compiler warnings.)
     //Sum contributions from parallel calculations
     for(iter = 0; iter < force_sets.size(); iter++){
         cblas_daxpy(num_dof, 1., &force_sets[iter][0], 1, &forces[0], 1);
     }
-    ct = clock() - ct;
-    cout << "Stage 4: " << ((double) ct) / CLOCKS_PER_SEC << endl;
 
     //Impose pinned boundary conditions
     for(int next_idx : nmd.bottom){

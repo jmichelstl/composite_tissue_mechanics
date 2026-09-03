@@ -253,17 +253,9 @@ struct GelModel {
 //Data structre to hold information pertaining structural relaxation
 struct NetworkMeshData {
 
-    NetworkMeshData(){
-        invariants = NULL;
-        def_grads = NULL;
-        pk_tensors = NULL;
-    }
+    NetworkMeshData(){}
 
-    NetworkMeshData(nmc_type my_type) : type(my_type) {
-        invariants = NULL;
-        def_grads = NULL;
-        pk_tensors = NULL;
-    }
+    NetworkMeshData(nmc_type my_type) : type(my_type) {}
 
     //If the network is not lattice based and has bond of varying length,
     //different stretching and bending constants will be needed, in general,
@@ -310,13 +302,6 @@ struct NetworkMeshData {
     //These fields are used to divide work among threads when parallel
     //force and energy force calculations are desired.
     vector<int> stretch_assignments, bend_assignments, gel_assignments;
-<<<<<<< HEAD
-    //Principal scalar invariants, deformation gradient tensors, and First
-    //Piola-Kirchoff stress tensors, used to expose more parallelism.
-    //vector<double> invariants, def_grads, pk_tensors;
-    double *invariants, *def_grads, *pk_tensors;
-=======
->>>>>>> bfb8820 (I fixed a few glitches and added my version of the classic Shewchuck code for robust geometric predicates, which I modified only to modernize function declarations to avoid compiler warnings.)
 
     //Fields needed for disjoint network-mesh complexes
     //These are ignored if the network vertices are a subset of the mesh
