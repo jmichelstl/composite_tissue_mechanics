@@ -1131,6 +1131,7 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
         nmd.stretch_assignments = job_assignments(nmd.edges.size()/2, threads);
         nmd.bend_assignments = job_assignments(nmd.triples.size()/3,  threads);
         nmd.gel_assignments = job_assignments(nmd.tetrahedra.size()/4, threads);
+<<<<<<< HEAD
 
         nmd.invariants = (double *) malloc(gmod.inv_funcs.size()*nmd.tetrahedra.size()/4*sizeof(double));
         nmd.def_grads = (double *) malloc(9*nmd.tetrahedra.size()/4*sizeof(double));
@@ -1138,6 +1139,8 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
         /*nmd.invariants.assign(gmod.inv_funcs.size()*nmd.tetrahedra.size()/4, 0);
         nmd.def_grads.assign(9*nmd.tetrahedra.size()/4, 0);
         nmd.pk_tensors.assign(9*nmd.tetrahedra.size()/4, 0);*/
+=======
+>>>>>>> bfb8820 (I fixed a few glitches and added my version of the classic Shewchuck code for robust geometric predicates, which I modified only to modernize function declarations to avoid compiler warnings.)
     }
 
     //Attempt to open a log file
@@ -1424,9 +1427,12 @@ void do_relaxation_run(string nmc_file, string log_name, string edat_name, strin
     //with copies of the gel constitutive model data structure
     if(threads > 1 && gmod.initialized){
         for(i = 0; i < threads; i++) nmd.model_copies[i].clear();
+<<<<<<< HEAD
         free(nmd.invariants);
         free(nmd.def_grads);
         free(nmd.pk_tensors);
+=======
+>>>>>>> bfb8820 (I fixed a few glitches and added my version of the classic Shewchuck code for robust geometric predicates, which I modified only to modernize function declarations to avoid compiler warnings.)
     }
 }
 

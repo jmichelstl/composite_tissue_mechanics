@@ -1275,6 +1275,7 @@ void disjoint_gel_energy_worker(vector<double> &pts, vector<int> tetrahedra, vec
     for(i = 0; i < gmod.inv_funcs.size(); i ++){
         arguments.push_back(gmod.inv_funcs[i](def_grad));
     }
+    arguments.insert(arguments.end(), gmod.param_values.begin(), gmod.param_values.end());
     *energy += volumes[tet_idx] * evaluator_evaluate(gmod.energy_func, gmod.count, gmod.arg_names, &arguments[0]);
 }
 
@@ -1425,7 +1426,10 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &force
 
     //Compute gel forces
     if(nmd.tetrahedra.size()){
+<<<<<<< HEAD
         ct = clock();
+=======
+>>>>>>> bfb8820 (I fixed a few glitches and added my version of the classic Shewchuck code for robust geometric predicates, which I modified only to modernize function declarations to avoid compiler warnings.)
         for(iter = 0; iter < nmd.gel_assignments.size() - 1; iter++){
             g.run([&nmd, iter, &force_sets]{
                 gel_forces(nmd.points, nmd.tetrahedra, nmd.inv_mats, nmd.volumes, nmd.model_copies[iter], force_sets[iter], nmd.gel_assignments[iter], nmd.gel_assignments[iter+1]);
@@ -1436,7 +1440,10 @@ void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &force
         cout << "Stage 3: " << ((double) ct) / CLOCKS_PER_SEC << endl;
     }
 
+<<<<<<< HEAD
     ct = clock();
+=======
+>>>>>>> bfb8820 (I fixed a few glitches and added my version of the classic Shewchuck code for robust geometric predicates, which I modified only to modernize function declarations to avoid compiler warnings.)
     //Sum contributions from parallel calculations
     for(iter = 0; iter < force_sets.size(); iter++){
         cblas_daxpy(num_dof, 1., &force_sets[iter][0], 1, &forces[0], 1);

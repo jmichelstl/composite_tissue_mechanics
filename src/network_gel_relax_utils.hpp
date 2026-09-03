@@ -310,10 +310,13 @@ struct NetworkMeshData {
     //These fields are used to divide work among threads when parallel
     //force and energy force calculations are desired.
     vector<int> stretch_assignments, bend_assignments, gel_assignments;
+<<<<<<< HEAD
     //Principal scalar invariants, deformation gradient tensors, and First
     //Piola-Kirchoff stress tensors, used to expose more parallelism.
     //vector<double> invariants, def_grads, pk_tensors;
     double *invariants, *def_grads, *pk_tensors;
+=======
+>>>>>>> bfb8820 (I fixed a few glitches and added my version of the classic Shewchuck code for robust geometric predicates, which I modified only to modernize function declarations to avoid compiler warnings.)
 
     //Fields needed for disjoint network-mesh complexes
     //These are ignored if the network vertices are a subset of the mesh
