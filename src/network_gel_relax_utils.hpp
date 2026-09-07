@@ -302,6 +302,7 @@ struct NetworkMeshData {
     //These fields are used to divide work among threads when parallel
     //force and energy force calculations are desired.
     vector<int> stretch_assignments, bend_assignments, gel_assignments;
+    vector<vector<double>> force_sets;
 
     //Fields needed for disjoint network-mesh complexes
     //These are ignored if the network vertices are a subset of the mesh
@@ -392,9 +393,11 @@ void compute_forces_unified(NetworkMeshData &nmd, vector<double> &forces);
 void compute_forces_disjoint(NetworkMeshData &nmd, vector<double> &forces);
 
 //void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
-void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets);
+//void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets);
+void compute_forces_unified_parallel(NetworkMeshData &nmd, vector<double> &forces);
 
 //void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets, vector<int> stretch_assignments, vector<int> bend_assignments, vector<int> gel_assignments);
-void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets);
+//void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces, vector<vector<double>> &force_sets);
+void compute_forces_disjoint_parallel(NetworkMeshData &nmd, vector<double> &forces);
 
 #endif
