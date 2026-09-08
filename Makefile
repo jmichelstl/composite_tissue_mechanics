@@ -18,6 +18,7 @@ all:
 	make ngrelax
 	make nmtraj_viz
 	make nmc_stats
+	make eq
 
 lib/libflists.a:
 	mkdir -p lib
@@ -63,6 +64,9 @@ nmtraj_viz: lib/libgeomprim.a lib/libnmio.a lib/libnmc.a lib/librandompointproc.
 nmc_stats: lib/libgeomprim.a lib/libnmio.a lib/libnmbvh.a lib/libpredicates.a
 	$(CPP) -o nmc_stats src/compute_network_mesh_statistics.cpp -L./lib -lgeomprim -lnmio -lnmbvh -lz -ltinyxml2 $(ONEAPI_LINK) -ltbb -lpredicates -lmetis
 
+eq: lib/libngru.a
+	$(CPP) $(ONEAPI_INC) -o eq src/evaluate_equilibrium_swelling.cpp -L./lib -lngru -lgeomprim -lmatheval $(ONEAPI_LINK) -ltbb $(MKL_LINK) -lcholmod -lnmio -lz -ltinyxml2
+
 geomclean:
 	rm lib/libgeomprim.a
 
@@ -96,9 +100,13 @@ bvhclean:
 ngruclean:
 	rm -f lib/libngru.a
 
+eqclean:
+	rm -f eq
+
 clean:
 	rm -f lib/*
 	rm -f nmcbatch
 	rm -f nglreax
 	rm -f nmtraj_viz
 	rm -f nmc_stats
+	rm -f eq

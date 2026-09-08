@@ -825,7 +825,6 @@ void compute_initial_state(NetworkMeshData &nmd, int threads){
     //appropriate swelling ratio, and equilibrate to account for local
     //heterogeneity. 
     double swelling = calc_equilibrium_swelling(nmd.gmod, DEFAULT_MAX_STEPS);
-    cout << "Swelling: " << swelling << endl;
 
     if(threads == 1){
         dilate_vertices(nmd.points, nmd.bounds, 1/swelling);
