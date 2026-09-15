@@ -46,8 +46,8 @@ class NetworkMeshComplex {
             bounds = new_bounds;
         }
 
-	    void set_volume(double new_vol){
-            mesh_vol = new_vol;
+	    void set_length(double new_len){
+            mesh_len = new_len;
         }
 
 	    vector<double> get_points(){
@@ -79,7 +79,7 @@ class NetworkMeshComplex {
         //indices. Cull any triple if one or both of its edges has been culled.
 	    void reassign_edges_triples();
 	    Bounds3D bounds;
-	    double mesh_vol;
+	    double mesh_len;
         vector<double> points;
         vector<edge> edges;
         vector<triple> triples;
@@ -97,14 +97,14 @@ class LatticeBasedNMC : public NetworkMeshComplex {
             bounds = Bounds3D(0, 0, 0, 0, 0, 0);
 	        scale = 0;
 	        lat_file_name = "";
-	        mesh_vol = 0;
+	        mesh_len = 0;
         }
 
-        LatticeBasedNMC(Bounds3D my_bounds, string lat_file, double my_scale, double my_vol){
+        LatticeBasedNMC(Bounds3D my_bounds, string lat_file, double my_scale, double my_len){
             bounds = my_bounds;
             lat_file_name = lat_file;
 	        scale = my_scale;
-	        mesh_vol = my_vol;
+	        mesh_len = my_len;
         }
 
         bool build_network();
@@ -192,11 +192,11 @@ class RandomPyrochloreNMC : public RandomNMCBase {
 
     public:
 
-        RandomPyrochloreNMC(Bounds3D my_bounds, double my_density, point_process my_proc, double my_vol = 0) {
+        RandomPyrochloreNMC(Bounds3D my_bounds, double my_density, point_process my_proc, double my_len = 0) {
             bounds = my_bounds;
             density = my_density;
             proc = my_proc;
-            mesh_vol = my_vol;
+            mesh_len = my_len;
             num_net_verts = 0;
         }
 

@@ -1294,7 +1294,7 @@ int main(int argc, char **argv){
     char c;
     int num_read, n_threads = 1;
     bool strain_mode = true;
-    string batch_file = "", base;
+    string job_file = "", base;
     string nmc_base, tag, extension;
     CGTRParams cgtrpar;
     vector<DisplacementProgram> progs;
@@ -1308,18 +1308,18 @@ int main(int argc, char **argv){
     //Parse input. Look for a mandatory job file name, and optional parameters
     //controlling the number of threads and determining whether displacements 
     //should be given as fractions of sample height.
-    while((c = getopt(argc, argv, "ab:dt:")) != -1){
+    while((c = getopt(argc, argv, "adj:t:")) != -1){
         switch(c) {
             //Use absolute, rather than relative, displacements
             case 'a':
                 strain_mode = false;
                 break;
-            case 'b':
-                batch_file = string(optarg);
-                break;
             case 'd':
                 type = nmc_type::disjoint;
                 extension = "dnmc";
+                break;
+            case 'j':
+                job_file = string(optarg);
                 break;
             case 't':
 		        num_read = sscanf(optarg, "%d", &n_threads);
@@ -1349,13 +1349,13 @@ int main(int argc, char **argv){
         }
     }
 
-    if(batch_file == ""){
-        cerr << "No batch file was supplied.\n";
+    if(job_file == ""){
+        cerr << "No job file was supplied.\n";
         exit(1);
     }
 
     //Attempt to read instructions from the specified job file
-    if(! parse_input_file(string(batch_file), base, tag, ks, kb, gmod, cgtrpar, progs)){
+    if(! parse_input_file(string(job_file), base, tag, ks, kb, gmod, cgtrpar, progs)){
         cerr << "Parsing of the job file failed.\n";
         return -2;
     }

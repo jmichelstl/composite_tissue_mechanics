@@ -30,7 +30,7 @@ enum class point_decorations {pyrochlore};
 enum class construction_type {lattice, off};
 
 //Different states of the batch file parser
-enum class nmc_parser_state {bounds, construction, bond_prob, elem_vol, output, 
+enum class nmc_parser_state {bounds, construction, bond_prob, elem_len, output, 
 	complete};
 
 //Generic virtual type for construction parameters
@@ -129,8 +129,8 @@ struct NMCJob {
         refine = false;
     }
 
-    //Target maximum mesh volume
-    double max_vol;
+    //Target maximum mesh side length
+    double max_len;
     //Bounds of the axis-aligned rectangular prism to be filled
     Bounds3D bounds;
     //General type of network construction to use
@@ -366,7 +366,7 @@ bool parse_nmc_batch_file(string file_name, NMCJob &job){
     nmc_parser_state state = nmc_parser_state::bounds;
     ifstream batch_file;
     string nextline, base_name;
-    double max_vol, bounds[6];
+    double max_len, bounds[6];
     construction_type ct;
     shared_ptr<ConstructParams> con_ptr;
     BOPParams bpar;
@@ -410,16 +410,16 @@ bool parse_nmc_batch_file(string file_name, NMCJob &job){
                     batch_file.close();
                     return false;
                 }
-                state = nmc_parser_state::elem_vol;
+                state = nmc_parser_state::elem_len;
                 break;
-            case nmc_parser_state::elem_vol :
-                if((num_read = sscanf(nextline.c_str(), "%lf", &max_vol)) == 0){
-                    cerr << "Expected a number for the maximum volume.\n";
+            case nmc_parser_state::elem_len :
+                if((num_read = sscanf(nextline.c_str(), "%lf", &max_len)) == 0){
+                    cerr << "Expected a number for the maximum length.\n";
                     batch_file.close();
                     return false;
                 }
-                else if(max_vol < 0){
-                    cerr << "The maximum volume must be non-negative.\n";
+                else if(max_len < 0){
+                    cerr << "The maximum length must be non-negative.\n";
                     batch_file.close();
                     return false;
                 }
@@ -452,7 +452,7 @@ bool parse_nmc_batch_file(string file_name, NMCJob &job){
     job.ctype = ct;
     job.constr_par = con_ptr;
     job.bop_par = bpar;
-    job.max_vol = max_vol;
+    job.max_len = max_len;
     job.realizations = realizations;
     job.base_name = base_name;
     job.num_segments = segments;
@@ -511,7 +511,7 @@ void lattice_based_batch(NMCJob job, bool use_verbose, int real_dec_digits){
     //Create a fully connected network. Copies of this network can be diluted
     //as needed.
     shared_ptr<LatticeBasedParams> lbp = static_pointer_cast<LatticeBasedParams>(job.constr_par);
-    shared_ptr<LatticeBasedNMC> lbnmc = make_shared<LatticeBasedNMC>(job.bounds, lbp->get_file(), lbp->get_scale(), job.max_vol);
+    shared_ptr<LatticeBasedNMC> lbnmc = make_shared<LatticeBasedNMC>(job.bounds, lbp->get_file(), lbp->get_scale(), job.max_len);
     lbnmc->build_network();
 
     for(bop = job.bop_par.min; bop <= job.bop_par.max + TOL; bop += job.bop_par.inc){
@@ -529,7 +529,7 @@ void lattice_based_batch(NMCJob job, bool use_verbose, int real_dec_digits){
                 lbnmc_copy->random_dilute(bop);
             }
             if(job.num_segments > 1) lbnmc_copy->add_hinges(job.num_segments);
-            if(job.max_vol > 0) lbnmc_copy->tetrahedralize();
+            if(job.max_len > 0) lbnmc_copy->tetrahedralize();
             if(job.refine) lbnmc_copy->refine_topology();
             report_network_mesh_complex((char *) output_name.c_str(), lbnmc_copy);
         }
@@ -542,7 +542,7 @@ void off_lattice_batch(NMCJob job, bool use_verbose, int real_dec_digits){
     string output_name, ext;
     shared_ptr<OffLatticeParams> olp = static_pointer_cast<OffLatticeParams>(job.constr_par);
 
-    if(job.max_vol > 0) ext = ".dnmc";
+    if(job.max_len > 0) ext = ".dnmc";
     else ext = ".nmc";
 
     for(bop = job.bop_par.min; bop <= job.bop_par.max + TOL; bop += job.bop_par.inc){
@@ -559,14 +559,14 @@ void off_lattice_batch(NMCJob job, bool use_verbose, int real_dec_digits){
             //TODO: If more decorations are supported in the future, more cases
             //will need to be added here.
             if(olp->get_decoration() == point_decorations::pyrochlore){  
-                shared_ptr<RandomPyrochloreNMC> rpnmc = make_shared<RandomPyrochloreNMC>(job.bounds, olp->get_density(), olp->get_process(), job.max_vol);
+                shared_ptr<RandomPyrochloreNMC> rpnmc = make_shared<RandomPyrochloreNMC>(job.bounds, olp->get_density(), olp->get_process(), job.max_len);
                 rpnmc->build_network();
                 if(bop < 1){
                     rpnmc->random_dilute(bop);
                 }
                 if(job.num_segments > 1) rpnmc->add_hinges(job.num_segments);
 
-                if(job.max_vol > 0){
+                if(job.max_len > 0){
                     rpnmc->tetrahedralize();
                     if(job.refine) rpnmc->refine_topology();
                     report_disjoint_network_mesh_complex((char *) output_name.c_str(), rpnmc);

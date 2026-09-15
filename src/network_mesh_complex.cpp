@@ -136,7 +136,7 @@ void categorize_points(double minx, double maxx, double miny, double maxy, doubl
 
 //Create a loop of points that defines a face of a prism. Add any points and
 //edges to the global manifest for the mesh that are missing
-inline void create_face(double lc, double s1, double s2, set<Vec3D> points, Vec3D center, Vec3D v1, Vec3D v2, map<Vec3D, int> &pmap, map<pair<int, int>, int> &emap, vector<int> &tags){
+inline void create_face(double mesh_len, double s1, double s2, set<Vec3D> points, Vec3D center, Vec3D v1, Vec3D v2, map<Vec3D, int> &pmap, map<pair<int, int>, int> &emap, vector<int> &tags){
 
     int iter;
     Vec3D current, next;
@@ -169,11 +169,11 @@ inline void create_face(double lc, double s1, double s2, set<Vec3D> points, Vec3
 
         if(pmap.find(current) == pmap.end()){
             pmap.insert(make_pair(current, pmap.size() + 1));
-            gmsh::model::geo::addPoint(current.x, current.y, current.z, lc, pmap.size());
+            gmsh::model::geo::addPoint(current.x, current.y, current.z, mesh_len, pmap.size());
         }
         if(pmap.find(next) == pmap.end()){
             pmap.insert(make_pair(next, pmap.size() + 1));
-            gmsh::model::geo::addPoint(next.x, next.y, next.z, lc, pmap.size());
+            gmsh::model::geo::addPoint(next.x, next.y, next.z, mesh_len, pmap.size());
         }
 
         idx1 = pmap[current];
@@ -200,15 +200,15 @@ NetworkMeshComplex::~NetworkMeshComplex(){}
 void NetworkMeshComplex::tetrahedralize(){}
 
 //Given a set of points to be included in a mesh, network edges, and the maximum
-//volume for a mesh cell, find the x, y and z bounds, create an axis-aligned 
-//rectuangular prism spanning these bounds, enforce inclusion of all specified 
-//points, and create lists of output points, index pairs specifying network 
-//edges, and point quartets specifying tetrahedra.
+//side length for a mesh cell, find the x, y and z bounds, create an
+//axis-aligned rectuangular prism spanning these bounds, enforce inclusion of 
+//all specified points, and create lists of output points, index pairs 
+//specifying network edges, and point quartets specifying tetrahedra.
 void LatticeBasedNMC::tetrahedralize(){
 
     vector<int> tags;
     int iter, tally, in_idx1, in_idx2, in_idx3, out_idx1, out_idx2, out_idx3;
-    double lc, minx, maxx, miny, maxy, minz, maxz;
+    double minx, maxx, miny, maxy, minz, maxz;
     map<Vec3D, int> pmap;
     vector<Vec3D> interior;
     vector<set<Vec3D>> face_sets;
@@ -229,26 +229,22 @@ void LatticeBasedNMC::tetrahedralize(){
     //Sort non-corner points into their appropriate categories
     categorize_points(minx, maxx, miny, maxy,  minz, maxz, points, face_sets, interior);
 
-    //This is the side length of a regular tetrahedron with the maximum 
-    //permissible volume.
-    lc = pow(6*sqrt(2) * mesh_vol, 1./3);
-
     gmsh::initialize();
     gmsh::model::add("box");
 
     //Make records of the points and line segments on the cube faces
     //Bottom
-    create_face(lc, maxy-miny, maxx-minx, face_sets[9], Vec3D((minx+maxx)/2,(miny+maxy)/2,minz), Vec3D(0,1.,0), Vec3D(1.,0,0), pmap, emap, minus_z_tags);
+    create_face(mesh_len, maxy-miny, maxx-minx, face_sets[9], Vec3D((minx+maxx)/2,(miny+maxy)/2,minz), Vec3D(0,1.,0), Vec3D(1.,0,0), pmap, emap, minus_z_tags);
     //Negative x face
-    create_face(lc, maxz-minz, maxy-miny, face_sets[1], Vec3D(minx,(miny+maxy)/2,(minz+maxz)/2), Vec3D(0,0,1.), Vec3D(0,1.,0), pmap, emap, minus_x_tags);
+    create_face(mesh_len, maxz-minz, maxy-miny, face_sets[1], Vec3D(minx,(miny+maxy)/2,(minz+maxz)/2), Vec3D(0,0,1.), Vec3D(0,1.,0), pmap, emap, minus_x_tags);
     //Positive x face
-    create_face(lc, maxy-miny, maxz-minz, face_sets[3], Vec3D(maxx,(miny+maxy)/2,(minz+maxz)/2), Vec3D(0,1.,0), Vec3D(0,0,1.), pmap, emap, plus_x_tags);
+    create_face(mesh_len, maxy-miny, maxz-minz, face_sets[3], Vec3D(maxx,(miny+maxy)/2,(minz+maxz)/2), Vec3D(0,1.,0), Vec3D(0,0,1.), pmap, emap, plus_x_tags);
     //Negative y face
-    create_face(lc, maxx-minx, maxz-minz, face_sets[5], Vec3D((minx+maxx)/2,miny,(minz+maxz)/2), Vec3D(1.,0,0), Vec3D(0,0,1.), pmap, emap, minus_y_tags);
+    create_face(mesh_len, maxx-minx, maxz-minz, face_sets[5], Vec3D((minx+maxx)/2,miny,(minz+maxz)/2), Vec3D(1.,0,0), Vec3D(0,0,1.), pmap, emap, minus_y_tags);
     //Positive y face
-    create_face(lc, maxz-minz, maxx-minx, face_sets[7], Vec3D((minx+maxx)/2,maxy,(minz+maxz)/2), Vec3D(0,0,1.), Vec3D(1.,0,0), pmap, emap, plus_y_tags);
+    create_face(mesh_len, maxz-minz, maxx-minx, face_sets[7], Vec3D((minx+maxx)/2,maxy,(minz+maxz)/2), Vec3D(0,0,1.), Vec3D(1.,0,0), pmap, emap, plus_y_tags);
     //Top
-    create_face(lc, maxx-minx, maxy-miny, face_sets[11], Vec3D((minx+maxx)/2,(miny+maxy)/2,maxz), Vec3D(1.,0,0), Vec3D(0,1.,0), pmap, emap, plus_z_tags);
+    create_face(mesh_len, maxx-minx, maxy-miny, face_sets[11], Vec3D((minx+maxx)/2,(miny+maxy)/2,maxz), Vec3D(1.,0,0), Vec3D(0,1.,0), pmap, emap, plus_z_tags);
 
     //Add the prism faces
     tally = emap.size();
@@ -270,7 +266,7 @@ void LatticeBasedNMC::tetrahedralize(){
     tally = pmap.size() + 1;
     //Minus x face
     for(Vec3D pt : face_sets[0]){
-        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, lc, tally);
+        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, mesh_len, tally);
         tags.push_back(tally ++);
     }
     gmsh::model::geo::synchronize();
@@ -279,7 +275,7 @@ void LatticeBasedNMC::tetrahedralize(){
 
     //Plus x face
     for(Vec3D pt : face_sets[2]){
-        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, lc, tally);
+        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, mesh_len, tally);
         tags.push_back(tally ++);
     }
     gmsh::model::geo::synchronize();
@@ -288,7 +284,7 @@ void LatticeBasedNMC::tetrahedralize(){
 
     //Minus y face
     for(Vec3D pt : face_sets[4]){
-        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, lc, tally);
+        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, mesh_len, tally);
         tags.push_back(tally ++);
     }
     gmsh::model::geo::synchronize();
@@ -297,7 +293,7 @@ void LatticeBasedNMC::tetrahedralize(){
 
     //Plus y face
     for(Vec3D pt : face_sets[6]){
-        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, lc, tally);
+        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, mesh_len, tally);
         tags.push_back(tally ++);
     }
     gmsh::model::geo::synchronize();
@@ -306,7 +302,7 @@ void LatticeBasedNMC::tetrahedralize(){
 
     //Minus z face
     for(Vec3D pt : face_sets[8]){
-        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, lc, tally);
+        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, mesh_len, tally);
         tags.push_back(tally ++);
     }
     gmsh::model::geo::synchronize();
@@ -315,7 +311,7 @@ void LatticeBasedNMC::tetrahedralize(){
 
     //Plus z face
     for(Vec3D pt : face_sets[10]){
-        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, lc, tally);
+        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, mesh_len, tally);
         tags.push_back(tally ++);
     }
     gmsh::model::geo::synchronize();
@@ -331,7 +327,7 @@ void LatticeBasedNMC::tetrahedralize(){
 
     //Add a record of each point to be inserted into the interior
     for(Vec3D pt : interior){
-        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, lc, tally);
+        gmsh::model::geo::addPoint(pt.x, pt.y, pt.z, mesh_len, tally);
         tags.push_back(tally ++);
     }
     gmsh::model::geo::synchronize();
@@ -514,7 +510,7 @@ void LatticeBasedNMC::refine_topology(){
     }
 }
 
-inline void create_face_simple(double lc, double s1, double s2, Vec3D center, Vec3D v1, Vec3D v2, map<Vec3D, int> &pmap, map<pair<int, int>, int> &emap, vector<int> &tags){
+inline void create_face_simple(double mesh_len, double s1, double s2, Vec3D center, Vec3D v1, Vec3D v2, map<Vec3D, int> &pmap, map<pair<int, int>, int> &emap, vector<int> &tags){
 
     int iter, idx1, idx2, edge_idx;
     Vec3D current, next;
@@ -542,11 +538,11 @@ inline void create_face_simple(double lc, double s1, double s2, Vec3D center, Ve
 
         if(pmap.find(current) == pmap.end()){
             pmap.insert(make_pair(current, pmap.size() + 1));
-            gmsh::model::geo::addPoint(current.x, current.y, current.z, lc, pmap.size());
+            gmsh::model::geo::addPoint(current.x, current.y, current.z, mesh_len, pmap.size());
         }
         if(pmap.find(next) == pmap.end()){
             pmap.insert(make_pair(next, pmap.size() + 1));
-            gmsh::model::geo::addPoint(next.x, next.y, next.z, lc, pmap.size());
+            gmsh::model::geo::addPoint(next.x, next.y, next.z, mesh_len, pmap.size());
         }
 
         idx1 = pmap[current];
@@ -575,7 +571,7 @@ void RandomNMCBase::tetrahedralize(){
 
     vector<int> tags;
     int iter, tally, offset, end;
-    double lc, minx, maxx, miny, maxy, minz, maxz;
+    double minx, maxx, miny, maxy, minz, maxz;
     map<Vec3D, int> pmap;
     vector<int> minus_x_tags, plus_x_tags, minus_y_tags, plus_y_tags, minus_z_tags, plus_z_tags;
     vector<pair<int, int>> entities;
@@ -593,26 +589,22 @@ void RandomNMCBase::tetrahedralize(){
 
     offset = points.size() / 3 - 1;
 
-    //This is the side length of a regular tetrahedron with the maximum 
-    //permissible volume.
-    lc = pow(6*sqrt(2) * mesh_vol, 1./3);
-
     gmsh::initialize();
     gmsh::model::add("box");
 
     //Make records of the points and line segments on the cube faces
     //Bottom
-    create_face_simple(lc, maxy-miny, maxx-minx, Vec3D((minx+maxx)/2,(miny+maxy)/2,minz), Vec3D(0,1.,0), Vec3D(1.,0,0), pmap, emap, minus_z_tags);
+    create_face_simple(mesh_len, maxy-miny, maxx-minx, Vec3D((minx+maxx)/2,(miny+maxy)/2,minz), Vec3D(0,1.,0), Vec3D(1.,0,0), pmap, emap, minus_z_tags);
     //Negative x face
-    create_face_simple(lc, maxz-minz, maxy-miny, Vec3D(minx,(miny+maxy)/2,(minz+maxz)/2), Vec3D(0,0,1.), Vec3D(0,1.,0), pmap, emap, minus_x_tags);
+    create_face_simple(mesh_len, maxz-minz, maxy-miny, Vec3D(minx,(miny+maxy)/2,(minz+maxz)/2), Vec3D(0,0,1.), Vec3D(0,1.,0), pmap, emap, minus_x_tags);
     //Positive x face
-    create_face_simple(lc, maxy-miny, maxz-minz, Vec3D(maxx,(miny+maxy)/2,(minz+maxz)/2), Vec3D(0,1.,0), Vec3D(0,0,1.), pmap, emap, plus_x_tags);
+    create_face_simple(mesh_len, maxy-miny, maxz-minz, Vec3D(maxx,(miny+maxy)/2,(minz+maxz)/2), Vec3D(0,1.,0), Vec3D(0,0,1.), pmap, emap, plus_x_tags);
     //Negative y face
-    create_face_simple(lc, maxx-minx, maxz-minz, Vec3D((minx+maxx)/2,miny,(minz+maxz)/2), Vec3D(1.,0,0), Vec3D(0,0,1.), pmap, emap, minus_y_tags);
+    create_face_simple(mesh_len, maxx-minx, maxz-minz, Vec3D((minx+maxx)/2,miny,(minz+maxz)/2), Vec3D(1.,0,0), Vec3D(0,0,1.), pmap, emap, minus_y_tags);
     //Positive y face
-    create_face_simple(lc, maxz-minz, maxx-minx, Vec3D((minx+maxx)/2,maxy,(minz+maxz)/2), Vec3D(0,0,1.), Vec3D(1.,0,0), pmap, emap, plus_y_tags);
+    create_face_simple(mesh_len, maxz-minz, maxx-minx, Vec3D((minx+maxx)/2,maxy,(minz+maxz)/2), Vec3D(0,0,1.), Vec3D(1.,0,0), pmap, emap, plus_y_tags);
     //Top
-    create_face_simple(lc, maxx-minx, maxy-miny, Vec3D((minx+maxx)/2,(miny+maxy)/2,maxz), Vec3D(1.,0,0), Vec3D(0,1.,0), pmap, emap, plus_z_tags);
+    create_face_simple(mesh_len, maxx-minx, maxy-miny, Vec3D((minx+maxx)/2,(miny+maxy)/2,maxz), Vec3D(1.,0,0), Vec3D(0,1.,0), pmap, emap, plus_z_tags);
 
     //Add the prism faces
     tally = emap.size();
